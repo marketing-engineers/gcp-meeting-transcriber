@@ -1,0 +1,22 @@
+# Virtual environment
+venv/
+
+# Environment variables (may contain secrets in v0.2+)
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Output artifacts (generated files, not source)
+output/*
+!output/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
