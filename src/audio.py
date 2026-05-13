@@ -1,8 +1,22 @@
 import logging
 import os
+import shutil
 import subprocess
 
 logger = logging.getLogger(__name__)
+
+
+class ProcessingError(Exception):
+    """Raised when audio processing fails for a known, handled reason."""
+
+
+def _check_ffmpeg_available() -> None:
+    """Verify ffmpeg is available on PATH. Raises ProcessingError if not found."""
+    if shutil.which("ffmpeg") is None:
+        raise ProcessingError(
+            "ffmpeg not found on PATH. Install it via your package manager "
+            "(e.g., 'sudo apt install ffmpeg' or 'brew install ffmpeg')."
+        )
 
 
 def extract_audio_to_flac(input_path: str, output_path: str) -> None:
@@ -15,8 +29,9 @@ def extract_audio_to_flac(input_path: str, output_path: str) -> None:
         output_path: The path where the FLAC file will be saved.
 
     Raises:
-        subprocess.CalledProcessError: If FFmpeg exits with a non-zero status.
+        ProcessingError: If FFmpeg is not found or exits with a non-zero status.
     """
+    _check_ffmpeg_available()
     logger.info("Extracting audio to FLAC: %s -> %s", input_path, output_path)
 
     command = [
@@ -32,11 +47,14 @@ def extract_audio_to_flac(input_path: str, output_path: str) -> None:
         subprocess.run(command, check=True, capture_output=True, text=True)
         logger.info("Successfully generated FLAC: %s", output_path)
     except subprocess.CalledProcessError as e:
-        logger.error("FFmpeg failed during extraction.\n%s", e.stderr)
-        raise
+        raise ProcessingError(
+            f"FFmpeg failed during audio extraction.\n"
+            f"Command: {' '.join(command)}\n"
+            f"stderr: {e.stderr}"
+        ) from e
 
 
-def split_flac(input_path: str, output_dir: str, base_name: str, chunk_length: int) -> None:
+def split_flac(input_path: str, output_dir: str, base_name: str, chunk_length: int) -> list[str]:
     """
     Splits a FLAC file into chunks of a specified length using FFmpeg's segment muxer (lossless copy).
 
@@ -46,9 +64,13 @@ def split_flac(input_path: str, output_dir: str, base_name: str, chunk_length: i
         base_name: The base name to use for naming output chunk files.
         chunk_length: The length of each chunk in seconds.
 
+    Returns:
+        List of paths to generated chunk files.
+
     Raises:
-        subprocess.CalledProcessError: If FFmpeg exits with a non-zero status.
+        ProcessingError: If FFmpeg is not found or exits with a non-zero status.
     """
+    _check_ffmpeg_available()
     output_pattern = os.path.join(output_dir, f"{base_name}_chunk_%03d.flac")
 
     logger.info("Splitting FLAC into %ds chunks: %s -> %s", chunk_length, input_path, output_pattern)
@@ -65,7 +87,18 @@ def split_flac(input_path: str, output_dir: str, base_name: str, chunk_length: i
 
     try:
         subprocess.run(command, check=True, capture_output=True, text=True)
-        logger.info("Successfully chunked FLAC into: %s", output_dir)
     except subprocess.CalledProcessError as e:
-        logger.error("FFmpeg failed during chunking.\n%s", e.stderr)
-        raise
+        raise ProcessingError(
+            f"FFmpeg failed during FLAC chunking.\n"
+            f"Command: {' '.join(command)}\n"
+            f"stderr: {e.stderr}"
+        ) from e
+
+    # Discover generated chunk files
+    chunk_files = sorted(
+        f for f in os.listdir(output_dir)
+        if f.startswith(f"{base_name}_chunk_") and f.endswith(".flac")
+    )
+    chunk_paths = [os.path.join(output_dir, f) for f in chunk_files]
+    logger.info("Successfully chunked FLAC into %d files in: %s", len(chunk_paths), output_dir)
+    return chunk_paths

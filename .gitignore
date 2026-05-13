@@ -1,17 +1,29 @@
 # Virtual environment
 venv/
 
-# Environment variables (may contain secrets in v0.2+)
+# Environment variables (may contain secrets)
 .env
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # Output artifacts (generated files, not source)
 output/*
 !output/.gitkeep
+
+# Transcripts (generated output)
+transcripts/*
+!transcripts/.gitkeep
+
+# Generated audio files
+*.flac
+
+# Service account keys (never commit credentials)
+service-account*.json
+credentials*.json
 
 # OS files
 .DS_Store
@@ -20,3 +32,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Input audio files (ignore media, keep folder)
+input/*
+!input/.gitkeep

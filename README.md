@@ -1,11 +1,12 @@
-# Marketing Engineers: Transcription Automator v0.1
+# Marketing Engineers: Transcription Automator v0.2
 
-This project automates the extraction, processing, and transcription preparation of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python and `ffmpeg`.
+This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud Speech-to-Text V2.
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.10+
 - `ffmpeg` installed on your system and accessible via the command line (e.g., `sudo apt install ffmpeg` or `brew install ffmpeg`).
+- `gcloud` CLI installed and configured.
 
 ## Setup
 
@@ -20,42 +21,55 @@ This project automates the extraction, processing, and transcription preparation
    pip install -r requirements.txt
    ```
 
-3. **Configure environment variables:**
+3. **Authenticate with Google Cloud:**
+   ```bash
+   gcloud auth application-default login
+   gcloud auth application-default set-quota-project <YOUR_PROJECT_ID>
+   ```
+   *Note: Ensure the **Cloud Speech-to-Text API** is enabled in your GCP project.*
+
+4. **Configure environment variables:**
    Copy the example file and adjust as needed:
    ```bash
    cp .env.example .env
    ```
-   Available variables:
-   | Variable | Default | Description |
-   |---|---|---|
-   | `CHUNK_LENGTH_SECONDS` | `900` | Duration (seconds) per audio chunk for the English route |
-   | `SUPPORTED_EXTENSIONS` | `.mp4,.m4a,.wav,.mov,.mkv` | Allowed input file extensions |
-   | `DUTCH_LANGUAGE_CODES` | `nl-NL` | Language codes routed as Dutch (monolithic) |
-   | `ENGLISH_LANGUAGE_CODES` | `en-US,en-GB` | Language codes routed as English (chunked) |
-   | `OUTPUT_DIR` | `output` | Directory for generated FLAC files |
+   *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID. The default bucket `your-transcriber-bucket` is pre-configured for temporary audio uploads with a 7-day retention policy and public access prevention.*
 
 ## Usage
 
-1. Place your input media file in the `input/` directory (e.g., `input/meeting.mp4`).
+1. Place your input media file in a directory (e.g., `input/meeting.mp4`).
 
-2. Run the script via the package module, specifying the input file and the language route:
+2. Run the script via the CLI, specifying the input file and the language route:
    ```bash
    python -m src.main input/meeting.mp4 --lang en-US
    ```
 
-3. Collect the prepared `.flac` files from the `output/` directory and upload them manually to the GCP Console.
+3. **Interactive Prompt:** If processing an English recording (which supports diarization), the script will prompt you for the number of speakers:
+   ```text
+   How many speakers were in this recording? (press Enter to auto-detect):
+   ```
+   You can enter a number (e.g., `2`) or press Enter to let the Chirp 3 model auto-detect the speaker count.
+
+4. The pipeline will automatically upload the audio to the GCS bucket (`gs://your-transcriber-bucket`), run the transcription via BatchRecognize, download the results, and clean up the GCS bucket.
+
+5. **Output:** The final transcripts will be saved in the `transcripts/` directory as both a human-readable text file and a raw JSON API response.
+
+### Partial Run (v0.1 Behavior)
+If you only want to extract and chunk the FLAC files without calling the GCP API, use the `--prepare-only` flag:
+```bash
+python -m src.main input/meeting.mp4 --lang en-US --prepare-only
+```
+You can then manually upload the generated FLACs from the `output/` directory.
 
 ### Language Routes
 
-The behavior of the script changes strictly based on the language requested, to accommodate Google Cloud's Chirp model constraints.
+The behavior of the script changes based on the language requested, to accommodate Google Cloud's Chirp 3 model constraints.
 
 #### Dutch (`--lang nl-NL`)
-- **Behavior:** Extracts audio losslessly into a single, monolithic `.flac` file.
-- **Next Steps:** Upload the resulting file from the `output/` directory directly to the GCP console. **Do NOT enable Speaker Diarization** when running the transcription on GCP.
+- **Behavior:** Extracts audio losslessly into a single, monolithic `.flac` file. Transcribes without diarization (as Chirp 3 does not support diarization for Dutch).
 
 #### English (`--lang en-US` or `--lang en-GB`)
-- **Behavior:** Extracts audio losslessly and splits the file into 15-minute chunks (e.g., `meeting_chunk_000.flac`, `meeting_chunk_001.flac`).
-- **Next Steps:** Upload all generated chunks from the `output/` directory to GCP. **ENABLE Speaker Diarization** (2 speakers). You will manually stitch the transcripts together.
+- **Behavior:** Extracts audio losslessly and splits the file into 15-minute chunks to stay under the 20-minute BatchRecognize limit for diarized audio. Automatically stitches the transcripts together after processing.
 
 ## Project Structure
 
@@ -63,13 +77,18 @@ The behavior of the script changes strictly based on the language requested, to 
 .
 ├── .env.example          # Template for environment variables
 ├── .gitignore
+├── pyproject.toml        # Project metadata and configuration
 ├── requirements.txt      # Python dependencies
-├── input/                # Drop raw media files here
-├── output/               # Generated FLAC files appear here
+├── input/                # (Optional) Drop raw media files here
+├── output/               # Intermediate FLAC files appear here
+├── transcripts/          # Final generated transcripts
+├── tests/                # Unit tests
 └── src/
-    ├── __init__.py
-    ├── audio.py           # FFmpeg subprocess logic (extraction, chunking)
-    ├── config.py          # Loads and validates .env configuration
+    ├── audio.py           # FFmpeg subprocess logic
+    ├── config.py          # Environment configuration
+    ├── gcs.py             # Google Cloud Storage operations
     ├── logger.py          # Centralized logging setup
-    └── main.py            # CLI entry point and orchestration
+    ├── main.py            # CLI entry point and orchestration
+    ├── transcribe.py      # Speech-to-Text V2 BatchRecognize logic
+    └── transcript_output.py # Transcript formatting and stitching
 ```
