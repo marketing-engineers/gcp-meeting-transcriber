@@ -9,6 +9,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.pytest_cache/
 
 # Output artifacts (generated files, not source)
 output/*
@@ -36,3 +37,12 @@ Thumbs.db
 # Input audio files (ignore media, keep folder)
 input/*
 !input/.gitkeep
+
+# AI Agent Workspaces
+.kilo/
+.cursor/
+.cline/
+.roo/
+.aider/
+.windsurf/
+.copilot/
