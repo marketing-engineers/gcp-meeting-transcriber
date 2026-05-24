@@ -87,3 +87,9 @@ def test_validate_gcp_config_valid():
     with patch("src.config.GCP_PROJECT_ID", "my-project"), \
          patch("src.config.GCS_BUCKET_NAME", "my-bucket"):
         validate_gcp_config()  # Should not raise
+
+
+def test_gcs_upload_timeout_default():
+    """Verify GCS_UPLOAD_TIMEOUT has a default value of 600."""
+    from src.config import GCS_UPLOAD_TIMEOUT
+    assert GCS_UPLOAD_TIMEOUT == 600

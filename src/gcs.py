@@ -29,7 +29,7 @@ def _get_client() -> storage.Client:
         ) from e
 
 
-def upload_to_gcs(local_path: str, bucket_name: str, gcs_prefix: str) -> str:
+def upload_to_gcs(local_path: str, bucket_name: str, gcs_prefix: str, timeout: int = 600) -> str:
     """
     Upload a local file to GCS.
 
@@ -37,6 +37,7 @@ def upload_to_gcs(local_path: str, bucket_name: str, gcs_prefix: str) -> str:
         local_path: Path to the local file.
         bucket_name: GCS bucket name.
         gcs_prefix: Prefix (folder) in the bucket.
+        timeout: Timeout in seconds for the upload operation.
 
     Returns:
         The gs:// URI of the uploaded object.
@@ -51,7 +52,7 @@ def upload_to_gcs(local_path: str, bucket_name: str, gcs_prefix: str) -> str:
     try:
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_name)
-        blob.upload_from_filename(local_path)
+        blob.upload_from_filename(local_path, timeout=timeout)
     except gcp_exceptions.NotFound as e:
         raise ProcessingError(
             f"GCS bucket '{bucket_name}' not found. "
@@ -74,7 +75,7 @@ def upload_to_gcs(local_path: str, bucket_name: str, gcs_prefix: str) -> str:
 
 
 def upload_files_to_gcs(
-    local_paths: list[str], bucket_name: str, gcs_prefix: str
+    local_paths: list[str], bucket_name: str, gcs_prefix: str, timeout: int = 600
 ) -> list[str]:
     """
     Upload multiple local files to GCS.
@@ -83,6 +84,7 @@ def upload_files_to_gcs(
         local_paths: List of local file paths to upload.
         bucket_name: GCS bucket name.
         gcs_prefix: Prefix (folder) in the bucket.
+        timeout: Timeout in seconds for each upload operation.
 
     Returns:
         List of gs:// URIs for uploaded objects.
@@ -96,7 +98,7 @@ def upload_files_to_gcs(
     )
     uris: list[str] = []
     for path in local_paths:
-        uri = upload_to_gcs(path, bucket_name, gcs_prefix)
+        uri = upload_to_gcs(path, bucket_name, gcs_prefix, timeout=timeout)
         uris.append(uri)
     return uris
 

@@ -16,6 +16,7 @@ from src.config import (
     TRANSCRIPT_OUTPUT_DIR,
     TRANSCRIPTION_MODEL,
     TRANSCRIPTION_TIMEOUT,
+    GCS_UPLOAD_TIMEOUT,
     validate_extension,
     validate_gcp_config,
 )
@@ -146,7 +147,7 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
 
     try:
         # Upload to GCS
-        gcs_uri = upload_to_gcs(final_output, GCS_BUCKET_NAME, gcs_prefix)
+        gcs_uri = upload_to_gcs(final_output, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT)
 
         # Transcribe (single file, no diarization)
         logger.info(
@@ -225,7 +226,7 @@ def _process_english(input_path: str, base_name: str, lang: str, prepare_only: b
 
         try:
             # 4. Upload chunks to GCS
-            gcs_uris = upload_files_to_gcs(chunk_paths, GCS_BUCKET_NAME, gcs_prefix)
+            gcs_uris = upload_files_to_gcs(chunk_paths, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT)
 
             # 5. Transcribe all chunks
             speaker_str = str(speaker_count) if speaker_count else "auto-detect"

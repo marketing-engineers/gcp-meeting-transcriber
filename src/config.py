@@ -57,6 +57,7 @@ GCP_REGION: str = _get_str("GCP_REGION", "eu")
 TRANSCRIPTION_MODEL: str = _get_str("TRANSCRIPTION_MODEL", "chirp_3")
 TRANSCRIPT_OUTPUT_DIR: str = _get_str("TRANSCRIPT_OUTPUT_DIR", "transcripts")
 TRANSCRIPTION_TIMEOUT: int = _get_int("TRANSCRIPTION_TIMEOUT", 600)
+GCS_UPLOAD_TIMEOUT: int = _get_int("GCS_UPLOAD_TIMEOUT", 600)
 
 
 def validate_extension(file_path: str) -> bool:

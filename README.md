@@ -38,6 +38,10 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    ```
    *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID. The default bucket `your-transcriber-bucket` is pre-configured for temporary audio uploads with a 7-day retention policy and public access prevention.*
 
+   Key environment variables:
+   - `GCS_UPLOAD_TIMEOUT` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads. If you have large files and slow upload speeds, increase this to prevent timeout errors.
+   - `TRANSCRIPTION_TIMEOUT` (Default: `600`): Timeout in seconds for the speech-to-text batch transcription API request.
+
 ## Usage
 
 1. Place your input media file in a directory (e.g., `input/meeting.mp4`).
