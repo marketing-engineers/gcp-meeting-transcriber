@@ -19,6 +19,15 @@ def _check_ffmpeg_available() -> None:
         )
 
 
+def _check_ffprobe_available() -> None:
+    """Verify ffprobe is available on PATH. Raises ProcessingError if not found."""
+    if shutil.which("ffprobe") is None:
+        raise ProcessingError(
+            "ffprobe not found on PATH. Install it via your package manager "
+            "(e.g., 'sudo apt install ffmpeg' or 'brew install ffmpeg')."
+        )
+
+
 def extract_audio_to_flac(input_path: str, output_path: str) -> None:
     """
     Extracts audio from a media file and transcodes it losslessly to FLAC using FFmpeg.
@@ -102,3 +111,46 @@ def split_flac(input_path: str, output_dir: str, base_name: str, chunk_length: i
     chunk_paths = [os.path.join(output_dir, f) for f in chunk_files]
     logger.info("Successfully chunked FLAC into %d files in: %s", len(chunk_paths), output_dir)
     return chunk_paths
+
+
+def get_audio_duration(file_path: str) -> float:
+    """
+    Retrieves the duration of a media file in seconds using ffprobe.
+
+    Args:
+        file_path: The path to the media file.
+
+    Returns:
+        The duration in seconds as a float.
+
+    Raises:
+        ProcessingError: If ffprobe fails or the duration cannot be parsed.
+    """
+    _check_ffprobe_available()
+    logger.info("Retrieving duration for: %s", file_path)
+
+    command = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        file_path,
+    ]
+
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        duration_str = result.stdout.strip()
+        if not duration_str:
+            raise ProcessingError(f"ffprobe returned empty output for: {file_path}")
+        return float(duration_str)
+    except subprocess.CalledProcessError as e:
+        raise ProcessingError(
+            f"ffprobe failed to retrieve audio duration.\n"
+            f"Command: {' '.join(command)}\n"
+            f"stderr: {e.stderr}"
+        ) from e
+    except ValueError as e:
+        raise ProcessingError(
+            f"Failed to parse audio duration from ffprobe output: '{duration_str}'.\n"
+            f"Original error: {e}"
+        ) from e

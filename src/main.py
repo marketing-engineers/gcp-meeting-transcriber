@@ -20,7 +20,7 @@ from src.config import (
     validate_extension,
     validate_gcp_config,
 )
-from src.audio import ProcessingError, extract_audio_to_flac, split_flac
+from src.audio import ProcessingError, extract_audio_to_flac, split_flac, get_audio_duration
 from src.gcs import delete_gcs_prefix, upload_files_to_gcs, upload_to_gcs
 from src.transcribe import transcribe_files, transcribe_single_file
 from src.transcript_output import (
@@ -125,62 +125,125 @@ def process_file(input_path: str, lang: str, prepare_only: bool = False) -> None
 
 def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: bool) -> None:
     """
-    Route 1: Dutch — monolithic FLAC, no diarization.
+    Route 1: Dutch — monolithic FLAC unless > 60 minutes, no diarization.
 
     Full pipeline: extract -> upload -> transcribe (no diarization) -> save transcript.
     """
     final_output = os.path.join(OUTPUT_DIR, f"{base_name}_{lang}.flac")
-    logger.info("Processing route for Dutch (%s): Monolithic file without diarization.", lang)
+    logger.info("Processing route for Dutch (%s).", lang)
 
     extract_audio_to_flac(input_path, final_output)
 
-    if prepare_only:
-        logger.info("-------------------------------------------------------------------")
-        logger.info("READY FOR GCP: %s", final_output)
-        logger.info("Upload this file to GCP. Do NOT enable Speaker Diarization.")
-        logger.info("-------------------------------------------------------------------")
-        return
+    duration = get_audio_duration(final_output)
+    is_chunked = duration > 3600.0
+
+    if is_chunked:
+        logger.info("Audio duration (%.2fs) exceeds 60 minutes limit. Switching to chunked mode.", duration)
+        chunk_paths = split_flac(final_output, OUTPUT_DIR, base_name, CHUNK_LENGTH_SECONDS)
+
+        if prepare_only:
+            logger.info("-------------------------------------------------------------------")
+            logger.info(
+                "READY FOR GCP: Files generated in %s/ matching %s_chunk_*.flac",
+                OUTPUT_DIR, base_name,
+            )
+            logger.info("Upload these chunked files to GCP. Do NOT enable Speaker Diarization.")
+            logger.info(
+                "Note: You will need to manually stitch the resulting transcripts "
+                "until the full pipeline is used (without --prepare-only)."
+            )
+            logger.info("-------------------------------------------------------------------")
+            if os.path.exists(final_output):
+                os.remove(final_output)
+            return
+    else:
+        logger.info("Audio duration (%.2fs) is within 60 minutes limit. Proceeding with monolithic file.", duration)
+        if prepare_only:
+            logger.info("-------------------------------------------------------------------")
+            logger.info("READY FOR GCP: %s", final_output)
+            logger.info("Upload this file to GCP. Do NOT enable Speaker Diarization.")
+            logger.info("-------------------------------------------------------------------")
+            return
 
     # --- Full pipeline: upload, transcribe, save, cleanup ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     gcs_prefix = f"{base_name}_{timestamp}"
 
     try:
-        # Upload to GCS
-        gcs_uri = upload_to_gcs(final_output, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT)
+        if is_chunked:
+            # Upload chunks to GCS
+            gcs_uris = upload_files_to_gcs(chunk_paths, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT)
 
-        # Transcribe (single file, no diarization)
-        logger.info(
-            "Starting transcription (model: %s, lang: %s, diarization: disabled)...",
-            TRANSCRIPTION_MODEL, lang,
-        )
-        response = transcribe_single_file(
-            gcs_uri=gcs_uri,
-            lang=lang,
-            enable_diarization=False,
-            speaker_count=None,
-            project_id=GCP_PROJECT_ID,
-            region=GCP_REGION,
-            model=TRANSCRIPTION_MODEL,
-            timeout=TRANSCRIPTION_TIMEOUT,
-        )
+            # Transcribe all chunks
+            logger.info(
+                "Starting transcription (model: %s, lang: %s, diarization: disabled, chunked)...",
+                TRANSCRIPTION_MODEL, lang,
+            )
+            responses = transcribe_files(
+                gcs_uris=gcs_uris,
+                lang=lang,
+                enable_diarization=False,
+                speaker_count=None,
+                project_id=GCP_PROJECT_ID,
+                region=GCP_REGION,
+                model=TRANSCRIPTION_MODEL,
+                timeout=TRANSCRIPTION_TIMEOUT,
+            )
 
-        # Process and save transcript
-        logger.info("Transcription complete. Processing results...")
-        transcript_text = stitch_plain_transcripts([response])
-        txt_path, json_path = save_transcript(
-            transcript_text=transcript_text,
-            raw_responses=[response],
-            output_dir=TRANSCRIPT_OUTPUT_DIR,
-            base_name=base_name,
-            lang=lang,
-        )
+            # Stitch and save transcript
+            logger.info("Transcription complete. Processing results...")
+            transcript_text = stitch_plain_transcripts(responses)
+            txt_path, json_path = save_transcript(
+                transcript_text=transcript_text,
+                raw_responses=responses,
+                output_dir=TRANSCRIPT_OUTPUT_DIR,
+                base_name=base_name,
+                lang=lang,
+            )
+        else:
+            # Upload monolithic FLAC to GCS
+            gcs_uri = upload_to_gcs(final_output, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT)
+
+            # Transcribe single monolithic file
+            logger.info(
+                "Starting transcription (model: %s, lang: %s, diarization: disabled, monolithic)...",
+                TRANSCRIPTION_MODEL, lang,
+            )
+            response = transcribe_single_file(
+                gcs_uri=gcs_uri,
+                lang=lang,
+                enable_diarization=False,
+                speaker_count=None,
+                project_id=GCP_PROJECT_ID,
+                region=GCP_REGION,
+                model=TRANSCRIPTION_MODEL,
+                timeout=TRANSCRIPTION_TIMEOUT,
+            )
+
+            # Process and save transcript
+            logger.info("Transcription complete. Processing results...")
+            transcript_text = stitch_plain_transcripts([response])
+            txt_path, json_path = save_transcript(
+                transcript_text=transcript_text,
+                raw_responses=[response],
+                output_dir=TRANSCRIPT_OUTPUT_DIR,
+                base_name=base_name,
+                lang=lang,
+            )
 
     finally:
-        # Cleanup: GCS objects
-        logger.info("Cleaning up temporary files...")
+        # Cleanup GCS objects
+        logger.info("Cleaning up temporary GCS files...")
         delete_gcs_prefix(GCS_BUCKET_NAME, gcs_prefix)
-        # Cleanup: local FLAC
+
+        # Cleanup local chunk files if any
+        if is_chunked:
+            for chunk_path in chunk_paths:
+                if os.path.exists(chunk_path):
+                    os.remove(chunk_path)
+            logger.info("Removed %d local chunk file(s).", len(chunk_paths))
+
+        # Cleanup local monolithic FLAC
         if os.path.exists(final_output):
             os.remove(final_output)
             logger.info("Removed local FLAC: %s", final_output)

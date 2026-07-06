@@ -118,3 +118,116 @@ class TestCLIArgumentParsing:
                     from src.main import main
                     main()
                     mock_pf.assert_called_once_with("input.mp4", "nl-nl", prepare_only=False)
+
+
+class TestProcessFileDutchRoute:
+    """Tests for process_file routing through Dutch route (monolithic vs chunked)."""
+
+    @patch("src.main.os.path.exists", return_value=True)
+    @patch("src.main.validate_extension", return_value=True)
+    @patch("src.main.validate_gcp_config")
+    @patch("src.main.extract_audio_to_flac")
+    @patch("src.main.get_audio_duration")
+    @patch("src.main.upload_to_gcs")
+    @patch("src.main.transcribe_single_file")
+    @patch("src.main.stitch_plain_transcripts")
+    @patch("src.main.save_transcript")
+    @patch("src.main.delete_gcs_prefix")
+    @patch("src.main.os.remove")
+    def test_dutch_monolithic_route(
+        self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
+        mock_transcribe, mock_upload, mock_duration, mock_extract,
+        mock_validate_gcp, mock_validate_ext, mock_exists
+    ):
+        """Dutch file <= 60 mins goes through monolithic route."""
+        mock_duration.return_value = 1800.0  # 30 minutes
+        mock_upload.return_value = "gs://bucket/prefix/file.flac"
+        mock_transcribe.return_value = MagicMock()
+        mock_stitch.return_value = "transcribed text"
+        mock_save_tr.return_value = ("txt_path", "json_path")
+
+        process_file("input.mp4", "nl-nl", prepare_only=False)
+
+        mock_extract.assert_called_once()
+        mock_duration.assert_called_once()
+        mock_upload.assert_called_once()
+        mock_transcribe.assert_called_once()
+        mock_stitch.assert_called_once()
+        mock_save_tr.assert_called_once()
+        mock_delete_gcs.assert_called_once()
+        mock_remove.assert_called_once()
+
+    @patch("src.main.os.path.exists", return_value=True)
+    @patch("src.main.validate_extension", return_value=True)
+    @patch("src.main.validate_gcp_config")
+    @patch("src.main.extract_audio_to_flac")
+    @patch("src.main.get_audio_duration")
+    @patch("src.main.split_flac")
+    @patch("src.main.upload_files_to_gcs")
+    @patch("src.main.transcribe_files")
+    @patch("src.main.stitch_plain_transcripts")
+    @patch("src.main.save_transcript")
+    @patch("src.main.delete_gcs_prefix")
+    @patch("src.main.os.remove")
+    def test_dutch_chunked_route(
+        self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
+        mock_transcribe, mock_upload_files, mock_split, mock_duration, mock_extract,
+        mock_validate_gcp, mock_validate_ext, mock_exists
+    ):
+        """Dutch file > 60 mins goes through chunked route."""
+        mock_duration.return_value = 3700.0  # 61 minutes
+        mock_split.return_value = ["chunk1.flac", "chunk2.flac"]
+        mock_upload_files.return_value = ["gs://b/p/c1.flac", "gs://b/p/c2.flac"]
+        mock_transcribe.return_value = [MagicMock(), MagicMock()]
+        mock_stitch.return_value = "stitched text"
+        mock_save_tr.return_value = ("txt_path", "json_path")
+
+        process_file("input.mp4", "nl-nl", prepare_only=False)
+
+        mock_extract.assert_called_once()
+        mock_duration.assert_called_once()
+        mock_split.assert_called_once()
+        mock_upload_files.assert_called_once()
+        mock_transcribe.assert_called_once()
+        mock_stitch.assert_called_once()
+        mock_save_tr.assert_called_once()
+        mock_delete_gcs.assert_called_once()
+        # Should clean up chunks + original file
+        assert mock_remove.call_count == 3
+
+    @patch("src.main.os.path.exists", return_value=True)
+    @patch("src.main.validate_extension", return_value=True)
+    @patch("src.main.extract_audio_to_flac")
+    @patch("src.main.get_audio_duration")
+    @patch("src.main.os.remove")
+    def test_dutch_monolithic_prepare_only(
+        self, mock_remove, mock_duration, mock_extract, mock_validate_ext, mock_exists
+    ):
+        """Dutch file <= 60 mins in prepare_only returns early without upload or cleanup."""
+        mock_duration.return_value = 1800.0
+
+        process_file("input.mp4", "nl-nl", prepare_only=True)
+
+        mock_extract.assert_called_once()
+        mock_duration.assert_called_once()
+        mock_remove.assert_not_called()
+
+    @patch("src.main.os.path.exists", return_value=True)
+    @patch("src.main.validate_extension", return_value=True)
+    @patch("src.main.extract_audio_to_flac")
+    @patch("src.main.get_audio_duration")
+    @patch("src.main.split_flac")
+    @patch("src.main.os.remove")
+    def test_dutch_chunked_prepare_only(
+        self, mock_remove, mock_split, mock_duration, mock_extract, mock_validate_ext, mock_exists
+    ):
+        """Dutch file > 60 mins in prepare_only chunks and cleans up only monolithic flac."""
+        mock_duration.return_value = 3700.0
+        mock_split.return_value = ["chunk1.flac", "chunk2.flac"]
+
+        process_file("input.mp4", "nl-nl", prepare_only=True)
+
+        mock_extract.assert_called_once()
+        mock_duration.assert_called_once()
+        mock_split.assert_called_once()
+        mock_remove.assert_called_once()  # Cleans up monolithic file
