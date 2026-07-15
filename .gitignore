@@ -30,6 +30,9 @@ credentials*.json
 .DS_Store
 Thumbs.db
 
+# Logs
+/logs/
+
 # IDE
 .vscode/
 .idea/
