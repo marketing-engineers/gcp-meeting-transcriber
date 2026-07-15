@@ -27,9 +27,8 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
 3. **Authenticate with Google Cloud:**
    ```bash
    gcloud auth application-default login
-   gcloud auth application-default set-quota-project <YOUR_PROJECT_ID>
    ```
-   *Note: Ensure the **Cloud Speech-to-Text API** is enabled in your GCP project.*
+   *Note: Ensure the **Cloud Speech-to-Text API** is enabled in your GCP project. Quota project attribution is managed programmatically via the `.env` configuration file.*
 
 4. **Configure environment variables:**
    Copy the example file and adjust as needed:

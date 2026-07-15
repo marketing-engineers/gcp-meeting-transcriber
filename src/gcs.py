@@ -18,8 +18,9 @@ def _get_client() -> storage.Client:
     global _client
     if _client is not None:
         return _client
+    from src.config import GCP_PROJECT_ID
     try:
-        _client = storage.Client()
+        _client = storage.Client(project=GCP_PROJECT_ID)
         return _client
     except Exception as e:
         raise ProcessingError(

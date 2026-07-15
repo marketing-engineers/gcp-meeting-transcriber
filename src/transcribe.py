@@ -61,8 +61,12 @@ def _build_recognition_config(
 
 def _get_speech_client(region: str) -> SpeechClient:
     """Create a Speech-to-Text V2 client with the regional endpoint."""
+    from src.config import GCP_PROJECT_ID
     api_endpoint = f"{region}-speech.googleapis.com"
-    client_options = ClientOptions(api_endpoint=api_endpoint)
+    client_options = ClientOptions(
+        api_endpoint=api_endpoint,
+        quota_project_id=GCP_PROJECT_ID,
+    )
     try:
         return SpeechClient(client_options=client_options)
     except Exception as e:

@@ -51,7 +51,7 @@ The pipeline routes logic strictly based on the requested language, respecting C
 - **GCS Upload:** Temporary upload for transcription, cleaned up after completion.
   - Bucket: `gs://your-transcriber-bucket` (configured with 7-day retention, uniform access, and public access prevention).
 - **Regional Endpoint:** Use `{region}-speech.googleapis.com` (default: `eu`). Note: This region must match the Chirp 3 API supported regions (e.g., `eu`), which is independent of the GCS bucket region.
-- **Authentication:** Must run `gcloud auth application-default login` and `gcloud auth application-default set-quota-project <PROJECT_ID>`. The Cloud Speech-to-Text API must also be enabled.
+- **Authentication:** Must run `gcloud auth application-default login` (with `GCP_PROJECT_ID` configured programmatically via `.env`). The Cloud Speech-to-Text API must also be enabled.
 - **BatchRecognize:** Single-file requests with InlineOutputConfig for each chunk.
 - **Cleanup:** Delete GCS objects in `finally` blocks; log paths on failure for manual inspection.
 
