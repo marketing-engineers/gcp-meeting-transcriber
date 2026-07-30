@@ -5,18 +5,20 @@ import sys
 from datetime import datetime
 
 from src.config import (
-    ALL_LANGUAGE_CODES,
-    CHUNK_LENGTH_SECONDS,
-    DUTCH_LANGUAGE_CODES,
-    ENGLISH_LANGUAGE_CODES,
+    CHUNK_LENGTH_SECONDS_DUTCH,
+    CHUNK_LENGTH_SECONDS_ENGLISH,
     GCP_PROJECT_ID,
     GCP_REGION,
     GCS_BUCKET_NAME,
+    GCS_UPLOAD_TIMEOUT_SECONDS,
+    LANGUAGE_CODES_ALL,
+    LANGUAGE_CODES_DUTCH,
+    LANGUAGE_CODES_ENGLISH,
     OUTPUT_DIR,
     TRANSCRIPT_OUTPUT_DIR,
+    TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
     TRANSCRIPTION_MODEL,
-    TRANSCRIPTION_TIMEOUT,
-    GCS_UPLOAD_TIMEOUT,
+    TRANSCRIPTION_TIMEOUT_SECONDS,
     validate_extension,
     validate_gcp_config,
 )
@@ -112,20 +114,20 @@ def process_file(input_path: str, lang: str, prepare_only: bool = False) -> None
     base_name = os.path.splitext(os.path.basename(input_path))[0]
     lang_lower = lang.lower()
 
-    if lang_lower in DUTCH_LANGUAGE_CODES:
+    if lang_lower in LANGUAGE_CODES_DUTCH:
         _process_dutch(input_path, base_name, lang, prepare_only)
-    elif lang_lower in ENGLISH_LANGUAGE_CODES:
+    elif lang_lower in LANGUAGE_CODES_ENGLISH:
         _process_english(input_path, base_name, lang, prepare_only)
     else:
         raise ProcessingError(
             f"Unsupported language route: {lang}. "
-            f"Configured languages: {', '.join(ALL_LANGUAGE_CODES)}"
+            f"Configured languages: {', '.join(LANGUAGE_CODES_ALL)}"
         )
 
 
 def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: bool) -> None:
     """
-    Route 1: Dutch — monolithic FLAC unless > 60 minutes, no diarization.
+    Route 1: Dutch — monolithic FLAC unless > CHUNK_LENGTH_SECONDS_DUTCH, no diarization.
 
     Full pipeline: extract -> upload -> transcribe (no diarization) -> save transcript.
     """
@@ -135,11 +137,14 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
     extract_audio_to_flac(input_path, final_output)
 
     duration = get_audio_duration(final_output)
-    is_chunked = duration > 3600.0
+    is_chunked = duration > CHUNK_LENGTH_SECONDS_DUTCH
 
     if is_chunked:
-        logger.info("Audio duration (%.2fs) exceeds 60 minutes limit. Switching to chunked mode.", duration)
-        chunk_paths = split_flac(final_output, OUTPUT_DIR, base_name, CHUNK_LENGTH_SECONDS)
+        logger.info(
+            "Audio duration (%.2fs) exceeds Dutch chunk threshold (%ds). Switching to chunked mode.",
+            duration, CHUNK_LENGTH_SECONDS_DUTCH,
+        )
+        chunk_paths = split_flac(final_output, OUTPUT_DIR, base_name, CHUNK_LENGTH_SECONDS_DUTCH)
 
         if prepare_only:
             logger.info("-------------------------------------------------------------------")
@@ -157,7 +162,10 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
                 os.remove(final_output)
             return
     else:
-        logger.info("Audio duration (%.2fs) is within 60 minutes limit. Proceeding with monolithic file.", duration)
+        logger.info(
+            "Audio duration (%.2fs) is within Dutch chunk threshold (%ds). Proceeding with monolithic file.",
+            duration, CHUNK_LENGTH_SECONDS_DUTCH,
+        )
         if prepare_only:
             logger.info("-------------------------------------------------------------------")
             logger.info("READY FOR GCP: %s", final_output)
@@ -172,7 +180,7 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
     try:
         if is_chunked:
             # Upload chunks to GCS
-            gcs_uris = upload_files_to_gcs(chunk_paths, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT)
+            gcs_uris = upload_files_to_gcs(chunk_paths, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT_SECONDS)
 
             # Transcribe all chunks
             logger.info(
@@ -187,7 +195,7 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
                 project_id=GCP_PROJECT_ID,
                 region=GCP_REGION,
                 model=TRANSCRIPTION_MODEL,
-                timeout=TRANSCRIPTION_TIMEOUT,
+                max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
             )
 
             # Stitch and save transcript
@@ -202,7 +210,7 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
             )
         else:
             # Upload monolithic FLAC to GCS
-            gcs_uri = upload_to_gcs(final_output, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT)
+            gcs_uri = upload_to_gcs(final_output, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT_SECONDS)
 
             # Transcribe single monolithic file
             logger.info(
@@ -217,7 +225,7 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
                 project_id=GCP_PROJECT_ID,
                 region=GCP_REGION,
                 model=TRANSCRIPTION_MODEL,
-                timeout=TRANSCRIPTION_TIMEOUT,
+                max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
             )
 
             # Process and save transcript
@@ -263,7 +271,7 @@ def _process_english(input_path: str, base_name: str, lang: str, prepare_only: b
         extract_audio_to_flac(input_path, temp_flac)
 
         # 2. Split into chunks
-        chunk_paths = split_flac(temp_flac, OUTPUT_DIR, base_name, CHUNK_LENGTH_SECONDS)
+        chunk_paths = split_flac(temp_flac, OUTPUT_DIR, base_name, CHUNK_LENGTH_SECONDS_ENGLISH)
         logger.info("Splitting into 15-minute chunks (%d chunks created).", len(chunk_paths))
 
         if prepare_only:
@@ -289,7 +297,7 @@ def _process_english(input_path: str, base_name: str, lang: str, prepare_only: b
 
         try:
             # 4. Upload chunks to GCS
-            gcs_uris = upload_files_to_gcs(chunk_paths, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT)
+            gcs_uris = upload_files_to_gcs(chunk_paths, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT_SECONDS)
 
             # 5. Transcribe all chunks
             speaker_str = str(speaker_count) if speaker_count else "auto-detect"
@@ -305,7 +313,7 @@ def _process_english(input_path: str, base_name: str, lang: str, prepare_only: b
                 project_id=GCP_PROJECT_ID,
                 region=GCP_REGION,
                 model=TRANSCRIPTION_MODEL,
-                timeout=TRANSCRIPTION_TIMEOUT,
+                max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
             )
 
             # 6. Stitch and save transcript
@@ -349,7 +357,7 @@ def main() -> None:
     parser.add_argument(
         "--lang",
         required=True,
-        choices=[code.lower() for code in ALL_LANGUAGE_CODES],
+        choices=[code.lower() for code in LANGUAGE_CODES_ALL],
         type=str.lower,
         help="Language of the recording (determines processing route)",
     )

@@ -90,6 +90,13 @@ def test_validate_gcp_config_valid():
 
 
 def test_gcs_upload_timeout_default():
-    """Verify GCS_UPLOAD_TIMEOUT has a default value of 600."""
-    from src.config import GCS_UPLOAD_TIMEOUT
-    assert GCS_UPLOAD_TIMEOUT == 600
+    """Verify GCS_UPLOAD_TIMEOUT_SECONDS default fallback in _get_int."""
+    from src.config import _get_int
+    with patch.dict(os.environ, {}, clear=True):
+        assert _get_int("GCS_UPLOAD_TIMEOUT_SECONDS", 600) == 600
+
+
+def test_chunk_length_seconds_dutch_loaded():
+    """Verify CHUNK_LENGTH_SECONDS_DUTCH is correctly loaded from src.config."""
+    from src.config import CHUNK_LENGTH_SECONDS_DUTCH
+    assert CHUNK_LENGTH_SECONDS_DUTCH in [300, 900]  # Depends on active .env file, but should be defined

@@ -139,8 +139,8 @@ class TestProcessFileDutchRoute:
         mock_transcribe, mock_upload, mock_duration, mock_extract,
         mock_validate_gcp, mock_validate_ext, mock_exists
     ):
-        """Dutch file <= 60 mins goes through monolithic route."""
-        mock_duration.return_value = 1800.0  # 30 minutes
+        """Dutch file <= CHUNK_LENGTH_SECONDS_DUTCH goes through monolithic route."""
+        mock_duration.return_value = 200.0  # 3.3 minutes (within 5-min default threshold)
         mock_upload.return_value = "gs://bucket/prefix/file.flac"
         mock_transcribe.return_value = MagicMock()
         mock_stitch.return_value = "transcribed text"
@@ -174,8 +174,8 @@ class TestProcessFileDutchRoute:
         mock_transcribe, mock_upload_files, mock_split, mock_duration, mock_extract,
         mock_validate_gcp, mock_validate_ext, mock_exists
     ):
-        """Dutch file > 60 mins goes through chunked route."""
-        mock_duration.return_value = 3700.0  # 61 minutes
+        """Dutch file > CHUNK_LENGTH_SECONDS_DUTCH goes through chunked route."""
+        mock_duration.return_value = 1800.0  # 30 minutes (exceeds 5-min default threshold)
         mock_split.return_value = ["chunk1.flac", "chunk2.flac"]
         mock_upload_files.return_value = ["gs://b/p/c1.flac", "gs://b/p/c2.flac"]
         mock_transcribe.return_value = [MagicMock(), MagicMock()]
@@ -203,8 +203,8 @@ class TestProcessFileDutchRoute:
     def test_dutch_monolithic_prepare_only(
         self, mock_remove, mock_duration, mock_extract, mock_validate_ext, mock_exists
     ):
-        """Dutch file <= 60 mins in prepare_only returns early without upload or cleanup."""
-        mock_duration.return_value = 1800.0
+        """Dutch file <= CHUNK_LENGTH_SECONDS_DUTCH in prepare_only returns early without upload or cleanup."""
+        mock_duration.return_value = 200.0
 
         process_file("input.mp4", "nl-nl", prepare_only=True)
 
@@ -221,8 +221,8 @@ class TestProcessFileDutchRoute:
     def test_dutch_chunked_prepare_only(
         self, mock_remove, mock_split, mock_duration, mock_extract, mock_validate_ext, mock_exists
     ):
-        """Dutch file > 60 mins in prepare_only chunks and cleans up only monolithic flac."""
-        mock_duration.return_value = 3700.0
+        """Dutch file > CHUNK_LENGTH_SECONDS_DUTCH in prepare_only chunks and cleans up only monolithic flac."""
+        mock_duration.return_value = 1800.0
         mock_split.return_value = ["chunk1.flac", "chunk2.flac"]
 
         process_file("input.mp4", "nl-nl", prepare_only=True)

@@ -40,12 +40,17 @@ def _get_optional_str(key: str) -> str | None:
 # Audio Processing Configuration
 # ---------------------------------------------------------------------------
 
-CHUNK_LENGTH_SECONDS: int = _get_int("CHUNK_LENGTH_SECONDS", 900)
+CHUNK_LENGTH_SECONDS_ENGLISH: int = _get_int("CHUNK_LENGTH_SECONDS_ENGLISH", 900)
+CHUNK_LENGTH_SECONDS_DUTCH: int = _get_int("CHUNK_LENGTH_SECONDS_DUTCH", 300)
 SUPPORTED_EXTENSIONS: list[str] = _get_csv_list("SUPPORTED_EXTENSIONS", ".mp4,.m4a,.wav,.mov,.mkv")
-DUTCH_LANGUAGE_CODES: list[str] = _get_csv_list("DUTCH_LANGUAGE_CODES", "nl-nl")
-ENGLISH_LANGUAGE_CODES: list[str] = _get_csv_list("ENGLISH_LANGUAGE_CODES", "en-us,en-gb")
-ALL_LANGUAGE_CODES: list[str] = DUTCH_LANGUAGE_CODES + ENGLISH_LANGUAGE_CODES
+
+# Language Routing (Group-first naming, plural for lists)
+LANGUAGE_CODES_DUTCH: list[str] = _get_csv_list("LANGUAGE_CODES_DUTCH", "nl-nl")
+LANGUAGE_CODES_ENGLISH: list[str] = _get_csv_list("LANGUAGE_CODES_ENGLISH", "en-us,en-gb")
+LANGUAGE_CODES_ALL: list[str] = LANGUAGE_CODES_DUTCH + LANGUAGE_CODES_ENGLISH
+
 OUTPUT_DIR: str = _get_str("OUTPUT_DIR", "output")
+TRANSCRIPT_OUTPUT_DIR: str = _get_str("TRANSCRIPT_OUTPUT_DIR", "transcripts")
 
 # ---------------------------------------------------------------------------
 # GCP Configuration (required for transcription, optional for --prepare-only)
@@ -55,9 +60,9 @@ GCP_PROJECT_ID: str | None = _get_optional_str("GCP_PROJECT_ID")
 GCS_BUCKET_NAME: str | None = _get_optional_str("GCS_BUCKET_NAME")
 GCP_REGION: str = _get_str("GCP_REGION", "eu")
 TRANSCRIPTION_MODEL: str = _get_str("TRANSCRIPTION_MODEL", "chirp_3")
-TRANSCRIPT_OUTPUT_DIR: str = _get_str("TRANSCRIPT_OUTPUT_DIR", "transcripts")
-TRANSCRIPTION_TIMEOUT: int = _get_int("TRANSCRIPTION_TIMEOUT", 600)
-GCS_UPLOAD_TIMEOUT: int = _get_int("GCS_UPLOAD_TIMEOUT", 600)
+TRANSCRIPTION_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_TIMEOUT_SECONDS", 1800)
+TRANSCRIPTION_MAX_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_MAX_TIMEOUT_SECONDS", 1800)
+GCS_UPLOAD_TIMEOUT_SECONDS: int = _get_int("GCS_UPLOAD_TIMEOUT_SECONDS", 600)
 
 
 def validate_extension(file_path: str) -> bool:
