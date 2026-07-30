@@ -39,7 +39,8 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
 
    Key environment variables:
    - `GCS_UPLOAD_TIMEOUT` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads. If you have large files and slow upload speeds, increase this to prevent timeout errors.
-   - `TRANSCRIPTION_TIMEOUT` (Default: `600`): Timeout in seconds for the speech-to-text batch transcription API request.
+   - `TRANSCRIPTION_STALL_TIMEOUT` (Default: `300`): Inactivity timeout in seconds. If a chunk's progress percentage does not advance for 300 seconds, the job is aborted as stalled.
+   - `TRANSCRIPTION_MAX_TIMEOUT` (Default: `1800`): Overall maximum time cap in seconds (30 minutes) for a transcription batch running in parallel.
 
 ## Usage
 
@@ -60,6 +61,9 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
 
 5. **Output:** The final transcripts will be saved in the `transcripts/` directory as both a human-readable text file and a raw JSON API response.
 
+### Parallel Execution & Progress Tracking
+When chunking long recordings, all chunks are submitted concurrently to GCP BatchRecognize and monitored in parallel. Real-time progress percentages (`Progress: Chunk 1: 45% | Chunk 2: 20%`) are logged every 10 seconds. Inactivity stall detection prevents hanging indefinitely if an API request stalls.
+
 ### Partial Run (v0.1 Behavior)
 If you only want to extract and chunk the FLAC files without calling the GCP API, use the `--prepare-only` flag:
 ```bash
@@ -72,10 +76,10 @@ You can then manually upload the generated FLACs from the `output/` directory.
 The behavior of the script changes based on the language requested, to accommodate Google Cloud's Chirp 3 model constraints.
 
 #### Dutch (`--lang nl-NL`)
-- **Behavior:** Extracts audio losslessly into a single, monolithic `.flac` file. Transcribes without diarization (as Chirp 3 does not support diarization for Dutch).
+- **Behavior:** Transcribes without diarization (as Chirp 3 does not support diarization for Dutch). Extracts audio losslessly into FLAC. If duration exceeds `CHUNK_LENGTH_SECONDS_DUTCH` (default: 5 minutes / 300s), audio is automatically split into chunks to prevent GCP BatchRecognize timeouts on the EU regional queue.
 
 #### English (`--lang en-US` or `--lang en-GB`)
-- **Behavior:** Extracts audio losslessly and splits the file into 15-minute chunks to stay under the 20-minute BatchRecognize limit for diarized audio. Automatically stitches the transcripts together after processing.
+- **Behavior:** Extracts audio losslessly and splits the file into 15-minute chunks to stay under the 20-minute BatchRecognize limit for diarized audio. Automatically stitches the transcripts together after processing and inserts explicit chunk boundary headers with notices warning that speaker numbers do not correspond across chunk boundaries.
 
 ## Project Structure
 
@@ -98,3 +102,25 @@ The behavior of the script changes based on the language requested, to accommoda
     ├── transcribe.py      # Speech-to-Text V2 BatchRecognize logic
     └── transcript_output.py # Transcript formatting and stitching
 ```
+
+## Roadmap & Future Scope (v0.3+)
+
+- **Cross-Chunk Speaker Reconciliation (`gemini-3.6-flash`)**:
+  - Pass GCS audio chunk URIs directly to `gemini-3.6-flash` via Vertex AI / Google GenAI SDK to analyze cross-chunk vocal profiles.
+  - Automatically generate a `GlobalSpeakerMap` JSON to align speaker labels (`Speaker 1`, `Speaker 2`) across long, multi-chunk recordings without local PyTorch dependencies.
+- **Automatic LLM Summarization Pipeline**: Summarize stitched transcripts natively via Gemini.
+- **Denoiser Toggle**: FFmpeg noise reduction for phone recordings.
+- **Model Adaptation**: Domain-specific vocabulary hints.
+
+---
+
+## Troubleshooting & Performance
+
+### Dutch (`nl-NL`) Queue Stalls & GDPR EU Residency Compliance
+The `GCP_REGION` is set to `eu` to enforce strict European data residency under GDPR compliance guidelines. However, Google Cloud's European multi-region endpoint (`eu-speech.googleapis.com`) occasionally places heavy 15-minute chunks on extended queue holds, leading to job stalls and timeouts.
+
+**GDPR-Compliant Resolution:**
+To bypass European queue congestion while maintaining 100% EU data residency, the pipeline splits Dutch recordings into shorter **5-minute chunks** (`CHUNK_LENGTH_SECONDS_DUTCH=300`). 
+* Smaller 5-minute chunks require significantly less processing footprint on the GCP backend.
+* Google's European queue slots these smaller chunks with high priority, completing them rapidly in parallel while keeping your audio data entirely inside the European Union.
+* To tune this behavior, adjust `CHUNK_LENGTH_SECONDS_DUTCH` in your `.env` file. Do not set `GCP_REGION=us` if you are bound by EU privacy laws.

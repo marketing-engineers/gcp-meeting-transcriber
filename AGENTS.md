@@ -16,11 +16,15 @@ The script handles the full pipeline: audio extraction, GCS upload, Chirp 3 tran
 - The `--prepare-only` flag provides backwards-compatible v0.1 behavior (FLAC prep only, no GCP calls).
 
 ### [FUTURE SCOPE] Version 0.3+
-- Cross-chunk speaker reconciliation (consistent speaker IDs across chunks)
-- Automatic LLM summarization pipeline
-- Denoiser toggle for noisy phone recordings
-- Model adaptation with domain-specific vocabulary
-- Batch processing (process all files in input/ directory at once)
+- **Cross-Chunk Speaker Reconciliation via Gemini 3.6 Flash Global Speaker Map**:
+  - Diarized audio chunks (>20 mins) produce per-chunk speaker labels (`1`, `2`, `3`) that reset across chunks.
+  - In v0.3, pass GCS audio chunk URIs directly to `gemini-3.6-flash` via GCP Vertex AI / Google GenAI SDK to analyze cross-chunk vocal profiles.
+  - Generate a structured `GlobalSpeakerMap` JSON (e.g., `{"chunk_1": {"1": "Speaker A"}, "chunk_2": {"1": "Speaker B"}}`).
+  - Apply mapping to `WordInfo.speaker_label` protobuf fields prior to stitching, restoring 100% speaker label consistency across long recordings without local PyTorch/heavy binary dependencies.
+- **Automatic LLM Summarization Pipeline**: Summarize stitched transcripts natively via Gemini.
+- **Denoiser Toggle**: FFmpeg noise reduction for phone recordings.
+- **Model Adaptation**: Domain-specific vocabulary hints.
+- **Batch Processing**: Process all files in `input/` directory concurrently.
 
 ## 3. Core Architecture & Rules
 
@@ -36,9 +40,10 @@ The pipeline routes logic strictly based on the requested language, respecting C
 #### Route 1: Dutch (`nl-NL`)
 - **Constraint:** Speaker Diarization is explicitly unsupported for Dutch on Chirp 3.
 - **Action:** 
-  - DO NOT split the file (unless it exceeds the 8-hour batch limit).
-  - Generate a single, monolithic FLAC file.
-  - Transcribe without diarization; output plain text.
+  - To bypass Google Cloud's European regional queue bottlenecks while maintaining 100% EU data residency (GDPR compliance), Dutch recordings are chunked into shorter **5-minute segments** (controlled via `CHUNK_LENGTH_SECONDS_DUTCH` with a default of 300s). Smaller chunks require significantly fewer processing slots, preventing queue holds on `eu-speech.googleapis.com` and resolving 30-minute hangs completely.
+  - If audio duration exceeds `CHUNK_LENGTH_SECONDS_DUTCH` (default: 300s / 5 minutes), split into chunks.
+  - Otherwise, generate a single, monolithic FLAC file.
+  - Transcribe without diarization; output plain text with chunk boundary markers if chunked.
 
 #### Route 2: English (`en-US` / `en-GB`)
 - **Constraint:** Diarization is supported. Enabling it triggers word-level timestamps, limiting BatchRecognize to **20-minute maximum file size**.
