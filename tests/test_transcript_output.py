@@ -7,6 +7,8 @@ import pytest
 from src.transcript_output import (
     format_diarized_transcript,
     format_plain_transcript,
+    stitch_diarized_transcripts,
+    stitch_plain_transcripts,
 )
 
 
@@ -107,3 +109,53 @@ class TestFormatPlainTranscript:
         r3 = _make_result(transcript="world")
         output = format_plain_transcript([r1, r2, r3])
         assert output == "Hello world"
+
+
+def _make_batch_response(results: list) -> MagicMock:
+    """Create a mock BatchRecognizeResponse object containing transcript results."""
+    file_result = MagicMock()
+    file_result.inline_result.transcript.results = results
+    resp = MagicMock()
+    resp.results = {"gs://bucket/file.flac": file_result}
+    return resp
+
+
+class TestStitchTranscripts:
+    """Tests for stitch_diarized_transcripts and stitch_plain_transcripts."""
+
+    def test_stitch_diarized_transcripts_includes_boundary_and_notice(self):
+        """Multiple diarized chunks include boundary headers and speaker warning notices."""
+        r1 = _make_result(words=[_make_word("Hello", "1")])
+        r2 = _make_result(words=[_make_word("World", "1")])
+
+        resp1 = _make_batch_response([r1])
+        resp2 = _make_batch_response([r2])
+
+        stitched = stitch_diarized_transcripts([resp1, resp2])
+
+        assert "Speaker 1: Hello" in stitched
+        assert "Speaker 1: World" in stitched
+        assert "--- Chunk Boundary (Chunk 2 of 2) ---" in stitched
+        assert "[NOTICE: Speaker numbers in Chunk 2 are local to this chunk and DO NOT correspond to speaker numbers in previous chunks.]" in stitched
+
+    def test_stitch_plain_transcripts_single_chunk_has_no_boundary(self):
+        """Single plain transcript chunk has no boundary headers."""
+        r1 = _make_result(transcript="Hello world")
+        resp1 = _make_batch_response([r1])
+
+        stitched = stitch_plain_transcripts([resp1])
+        assert stitched == "Hello world"
+        assert "Chunk Boundary" not in stitched
+
+    def test_stitch_plain_transcripts_multiple_chunks_includes_boundary(self):
+        """Multiple plain transcript chunks include chunk boundary markers."""
+        r1 = _make_result(transcript="Chunk one content.")
+        r2 = _make_result(transcript="Chunk two content.")
+
+        resp1 = _make_batch_response([r1])
+        resp2 = _make_batch_response([r2])
+
+        stitched = stitch_plain_transcripts([resp1, resp2])
+        assert "Chunk one content." in stitched
+        assert "--- Chunk Boundary (Chunk 2 of 2) ---" in stitched
+        assert "Chunk two content." in stitched

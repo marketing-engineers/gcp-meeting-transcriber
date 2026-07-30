@@ -122,16 +122,18 @@ def stitch_diarized_transcripts(
     """
     Stitch together diarized transcripts from multiple chunked files.
 
-    Inserts chunk boundary markers between segments. Speaker numbering may
-    reset across chunks — cross-chunk speaker reconciliation is deferred to v0.3.
+    Inserts chunk boundary markers and explicit speaker non-alignment warning notices
+    between segments. Speaker numbering resets per chunk — cross-chunk speaker
+    reconciliation is deferred to v0.3.
 
     Args:
         responses: Ordered list of BatchRecognizeResponse (one per chunk).
 
     Returns:
-        Full stitched transcript with chunk boundary markers.
+        Full stitched transcript with chunk boundary markers and speaker notices.
     """
     parts: list[str] = []
+    total_chunks = len(responses)
 
     for i, response in enumerate(responses):
         results = _extract_results_from_response(response)
@@ -139,7 +141,12 @@ def stitch_diarized_transcripts(
 
         if chunk_text:
             if i > 0:
-                parts.append("\n--- Chunk boundary ---\n")
+                boundary_marker = (
+                    f"\n\n--- Chunk Boundary (Chunk {i + 1} of {total_chunks}) ---\n"
+                    f"[NOTICE: Speaker numbers in Chunk {i + 1} are local to this chunk "
+                    f"and DO NOT correspond to speaker numbers in previous chunks.]\n\n"
+                )
+                parts.append(boundary_marker)
             parts.append(chunk_text)
 
     return ''.join(parts)
@@ -151,6 +158,8 @@ def stitch_plain_transcripts(
     """
     Stitch together plain (non-diarized) transcripts.
 
+    Inserts chunk boundary markers if multiple chunks are present.
+
     Args:
         responses: Ordered list of BatchRecognizeResponse.
 
@@ -158,14 +167,17 @@ def stitch_plain_transcripts(
         Full stitched transcript text.
     """
     parts: list[str] = []
+    total_chunks = len(responses)
 
-    for response in responses:
+    for i, response in enumerate(responses):
         results = _extract_results_from_response(response)
         chunk_text = format_plain_transcript(results)
         if chunk_text:
+            if i > 0 and total_chunks > 1:
+                parts.append(f"\n\n--- Chunk Boundary (Chunk {i + 1} of {total_chunks}) ---\n\n")
             parts.append(chunk_text)
 
-    return ' '.join(parts)
+    return ''.join(parts) if total_chunks > 1 else ' '.join(parts)
 
 
 def _responses_to_dict(
