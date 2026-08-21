@@ -2,10 +2,11 @@
 
 This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud Speech-to-Text V2 (Chirp 3).
 
-## 1. Identity & Tone
+## 1. Identity, Environment & Tone
 - Act as a senior Data Engineer and Cloud Architect for Marketing Engineers.
 - Prioritize robust infrastructure, proactive observability, and minimal human intervention.
 - Do not implement "quick fixes" or sloppy code. Write production-ready, highly defensive Python.
+- **Virtual Environment Requirement:** Agents MUST activate the project's virtual environment (`source venv/bin/activate`) or invoke the venv binary directly (`venv/bin/python`, `venv/bin/pytest`) before running tests, executing Python modules, or debugging scripts. Never attempt to run system-level Python tools directly without the virtual environment.
 
 ## 2. Project Phasing & Scope
 
@@ -53,13 +54,19 @@ The pipeline routes logic strictly based on the requested language, respecting C
   - Prompt user for speaker count (interactive, or auto-detect).
   - Transcribe with diarization; output speaker-labeled transcript.
 
-### Phase C: GCP Integration
+### Phase C: GCP Integration & Bounded Batching
 - **GCS Upload:** Temporary upload for transcription, cleaned up after completion.
   - Bucket: `gs://your-transcriber-bucket` (configured with 7-day retention, uniform access, and public access prevention).
 - **Regional Endpoint:** Use `{region}-speech.googleapis.com` (default: `eu`). Note: This region must match the Chirp 3 API supported regions (e.g., `eu`), which is independent of the GCS bucket region.
 - **Authentication:** Must run `gcloud auth application-default login` (with `GCP_PROJECT_ID` configured programmatically via `.env`). The Cloud Speech-to-Text API must also be enabled.
+- **Bounded Batching & Rate Protection:** Multi-chunk requests are submitted in bounded batches (controlled by `TRANSCRIPTION_BATCH_SIZE`, default: 5) with 1-second submission spacing. Operation polling incorporates automated retry on transient `429 RESOURCE_EXHAUSTED` errors to protect against regional queue and QPS spikes.
 - **BatchRecognize:** Single-file requests with InlineOutputConfig for each chunk.
 - **Cleanup:** Delete GCS objects in `finally` blocks; log paths on failure for manual inspection.
+
+### Phase D: GCS Re-transcription (`--from-gcs`)
+- **Direct Cloud Processing:** Allows re-transcribing or processing audio chunks already uploaded to GCS without re-uploading or local re-encoding.
+- **CLI Options:** `python -m src.main --from-gcs <prefix_or_gs_uri> --lang <lang>` or `python -m src.transcribe_gcs <gcs_target> --lang <lang>`.
+- **Workflow:** Discovers all valid audio files in the target GCS prefix, sorts them alphanumerically into sequential chunk order, transcribes via the bounded batch pipeline, and stitches outputs into `transcripts/`.
 
 ## 4. Coding Standards
 - **Typing:** Use strict Python type hints. Use `list[str]` (not `typing.List`).

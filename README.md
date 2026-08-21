@@ -38,9 +38,9 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID. The default bucket `your-transcriber-bucket` is pre-configured for temporary audio uploads with a 7-day retention policy and public access prevention.*
 
     Key environment variables:
-    - `GCS_UPLOAD_TIMEOUT` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads. If you have large files and slow upload speeds, increase this to prevent timeout errors.
-    - `TRANSCRIPTION_STALL_TIMEOUT` (Default: `300`): Inactivity timeout in seconds. If a chunk's progress percentage does not advance for 300 seconds, the job is aborted as stalled.
-    - `TRANSCRIPTION_MAX_TIMEOUT` (Default: `1800`): Overall maximum time cap in seconds (30 minutes) for a transcription batch running in parallel.
+    - `TRANSCRIPTION_BATCH_SIZE` (Default: `5`): Maximum number of audio chunks submitted and monitored concurrently per batch to prevent GCP rate-limit (`429 RESOURCE_EXHAUSTED`) issues.
+    - `GCS_UPLOAD_TIMEOUT_SECONDS` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads. If you have large files and slow upload speeds, increase this to prevent timeout errors.
+    - `TRANSCRIPTION_MAX_TIMEOUT_SECONDS` (Default: `1800`): Overall maximum time cap in seconds (30 minutes) across the entire transcription job.
     - `TRANSCRIPTION_MAX_CHARS_PER_LINE` (Default: `120`): Target maximum line length for transcript post-processing.
     - `TRANSCRIPTION_MAX_SENTENCES_PER_LINE` (Default: `3`): Target maximum sentences per line.
     - `TRANSCRIPTION_CUSTOM_PROMPT` (Optional): Custom prompt instruction passed to Chirp 3 models via `CustomPromptConfig`.
@@ -65,8 +65,23 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
 5. **Output:** The final transcripts will be saved in the `transcripts/` directory as both a human-readable text file and a raw JSON API response.
    Transcripts are automatically post-processed at sentence boundaries (`.`, `?`, `!`) to guarantee clean, line-bounded plain text (capped by default at 120 characters per line) for optimal compatibility with CLI tools, git diffs, and LLM contexts.
 
-### Parallel Execution & Progress Tracking
-When chunking long recordings, all chunks are submitted concurrently to GCP BatchRecognize and monitored in parallel. Real-time progress percentages (`Progress: Chunk 1: 45% | Chunk 2: 20%`) are logged every 10 seconds. Inactivity stall detection prevents hanging indefinitely if an API request stalls.
+### Bounded Batch Execution & Rate Protection
+When chunking long recordings, requests are submitted in bounded batches (controlled by `TRANSCRIPTION_BATCH_SIZE`, default: 5) with a 1-second submission spacing. Operation polling incorporates automated backoff and retry on transient `429 RESOURCE_EXHAUSTED` errors to prevent regional queue congestion and API throttling.
+
+### Transcribing Existing GCS Files (`--from-gcs`)
+If audio chunks are already uploaded to Google Cloud Storage (e.g. following a recovery or re-run scenario), you can process them directly without local re-encoding or re-uploading:
+
+```bash
+# Using the main entrypoint
+python -m src.main --from-gcs sample-meeting-2026-08-20_20260820_152628 --lang nl-NL
+
+# Or with full gs:// URI
+python -m src.main --from-gcs gs://your-transcriber-bucket/sample-meeting-2026-08-20_20260820_152628 --lang nl-NL
+
+# Or using the dedicated module
+python -m src.transcribe_gcs sample-meeting-2026-08-20_20260820_152628 --lang nl-NL
+```
+The GCS re-transcription workflow automatically discovers and sorts all audio chunks under the prefix, executes the bounded batch pipeline, stitches the transcripts, and saves output to `transcripts/`.
 
 ### Partial Run (v0.1 Behavior)
 If you only want to extract and chunk the FLAC files without calling the GCP API, use the `--prepare-only` flag:
@@ -104,6 +119,7 @@ The behavior of the script changes based on the language requested, to accommoda
     ├── logger.py          # Centralized logging setup
     ├── main.py            # CLI entry point and orchestration
     ├── transcribe.py      # Speech-to-Text V2 BatchRecognize logic
+    ├── transcribe_gcs.py  # Direct GCS audio transcription & recovery
     └── transcript_output.py # Transcript formatting and stitching
 ```
 
