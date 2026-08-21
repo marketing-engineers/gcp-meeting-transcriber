@@ -75,6 +75,44 @@ class TestTranscribeFilesParallel:
 
     @patch("src.transcribe._get_speech_client")
     @patch("time.sleep")
+    def test_transcribe_files_batches_and_retries_429(self, mock_sleep, mock_get_client):
+        """Chunks are split into batches, and transient 429 errors during polling are retried."""
+        from google.api_core import exceptions as gcp_exceptions
+
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        op1 = _make_mock_op(done=False)
+        op2 = _make_mock_op(done=False)
+        op3 = _make_mock_op(done=False)
+
+        mock_client.batch_recognize.side_effect = [op1, op2, op3]
+
+        uris = ["gs://b/chunk1.flac", "gs://b/chunk2.flac", "gs://b/chunk3.flac"]
+
+        # op1 in batch 1 throws ResourceExhausted on first check, then succeeds
+        op1.done.side_effect = [gcp_exceptions.ResourceExhausted("Rate exceeded"), True]
+        op2.done.side_effect = [True]
+        # op3 in batch 2 completes immediately
+        op3.done.side_effect = [True]
+
+        results = transcribe_files(
+            gcs_uris=uris,
+            lang="nl-nl",
+            enable_diarization=False,
+            speaker_count=None,
+            project_id="test-proj",
+            region="eu",
+            model="chirp_3",
+            batch_size=2,  # batch 1: [chunk1, chunk2], batch 2: [chunk3]
+            poll_interval=0,
+        )
+
+        assert len(results) == 3
+        assert mock_client.batch_recognize.call_count == 3
+
+    @patch("src.transcribe._get_speech_client")
+    @patch("time.sleep")
     def test_transcribe_files_max_timeout_raises_error(self, mock_sleep, mock_get_client):
         """Batch exceeding max_timeout raises ProcessingError."""
         mock_client = MagicMock()
