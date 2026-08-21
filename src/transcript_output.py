@@ -3,18 +3,99 @@
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from google.cloud.speech_v2.types import cloud_speech
 from google.protobuf.json_format import MessageToDict
 
+from src.config import (
+    TRANSCRIPTION_MAX_CHARS_PER_LINE,
+    TRANSCRIPTION_MAX_SENTENCES_PER_LINE,
+)
+
 logger = logging.getLogger(__name__)
 
 
-def format_diarized_transcript(results: list[cloud_speech.SpeechRecognitionResult]) -> str:
+def format_transcript_lines(
+    text: str,
+    max_chars_per_line: int = TRANSCRIPTION_MAX_CHARS_PER_LINE,
+    max_sentences_per_line: int = TRANSCRIPTION_MAX_SENTENCES_PER_LINE,
+) -> str:
+    """
+    Splits a continuous transcript string into short, readable lines
+    based on sentence boundaries (. ? !) while capping line length.
+
+    Args:
+        text: Input raw transcript text.
+        max_chars_per_line: Target maximum character length per line.
+        max_sentences_per_line: Target maximum sentences per line.
+
+    Returns:
+        Line-bounded, sentence-wrapped transcript text joined with newlines.
+    """
+    if not text or not text.strip():
+        return ""
+
+    # Split into raw sentence strings using sentence boundary punctuation
+    raw_sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+
+    # Expand any individual sentences that exceed max_chars_per_line via word wrapping
+    sentences: list[str] = []
+    for s in raw_sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if len(s) <= max_chars_per_line:
+            sentences.append(s)
+        else:
+            # Word-wrap long sentences
+            words = s.split()
+            curr_words: list[str] = []
+            curr_len = 0
+            for w in words:
+                if curr_words and curr_len + len(w) + 1 > max_chars_per_line:
+                    sentences.append(" ".join(curr_words))
+                    curr_words = [w]
+                    curr_len = len(w)
+                else:
+                    curr_words.append(w)
+                    curr_len += len(w) + (1 if len(curr_words) > 1 else 0)
+            if curr_words:
+                sentences.append(" ".join(curr_words))
+
+    lines: list[str] = []
+    current_chunk: list[str] = []
+    current_length = 0
+
+    for sentence in sentences:
+        sentence_len = len(sentence)
+        needed_len = sentence_len if not current_chunk else current_length + 1 + sentence_len
+
+        if (needed_len > max_chars_per_line) or (len(current_chunk) >= max_sentences_per_line):
+            if current_chunk:
+                lines.append(" ".join(current_chunk))
+            current_chunk = [sentence]
+            current_length = sentence_len
+        else:
+            current_chunk.append(sentence)
+            current_length = needed_len
+
+    if current_chunk:
+        lines.append(" ".join(current_chunk))
+
+    return "\n".join(lines)
+
+
+def format_diarized_transcript(
+    results: list[cloud_speech.SpeechRecognitionResult],
+    max_chars_per_line: int = TRANSCRIPTION_MAX_CHARS_PER_LINE,
+    max_sentences_per_line: int = TRANSCRIPTION_MAX_SENTENCES_PER_LINE,
+) -> str:
     """
     Process word-level speaker labels into speaker turns.
-    Groups consecutive words by the same speaker into paragraphs.
+    Groups consecutive words by the same speaker into paragraphs, wrapping
+    long speaker turns onto multiple lines at sentence boundaries.
 
     Output format:
         Speaker 1: Good morning everyone, let's start with the quarterly review.
@@ -22,6 +103,8 @@ def format_diarized_transcript(results: list[cloud_speech.SpeechRecognitionResul
 
     Args:
         results: List of SpeechRecognitionResult from the API response.
+        max_chars_per_line: Target maximum character length per line.
+        max_sentences_per_line: Target maximum sentences per line.
 
     Returns:
         Formatted transcript string with speaker labels.
@@ -33,6 +116,25 @@ def format_diarized_transcript(results: list[cloud_speech.SpeechRecognitionResul
     current_speaker: int | None = None
     current_words: list[str] = []
 
+    def _flush_turn(speaker: int | None, words: list[str]) -> None:
+        if not words:
+            return
+        turn_text = ' '.join(words)
+        formatted_turn = format_transcript_lines(
+            turn_text,
+            max_chars_per_line=max_chars_per_line,
+            max_sentences_per_line=max_sentences_per_line,
+        )
+        if not formatted_turn:
+            return
+        turn_lines = formatted_turn.split('\n')
+        if speaker is not None:
+            prefix = f"Speaker {speaker}: "
+            lines.append(f"{prefix}{turn_lines[0]}")
+            lines.extend(turn_lines[1:])
+        else:
+            lines.extend(turn_lines)
+
     for result in results:
         if not result.alternatives:
             continue
@@ -43,12 +145,17 @@ def format_diarized_transcript(results: list[cloud_speech.SpeechRecognitionResul
         if not alternative.words:
             transcript = alternative.transcript.strip()
             if transcript:
-                lines.append(transcript)
+                formatted_text = format_transcript_lines(
+                    transcript,
+                    max_chars_per_line=max_chars_per_line,
+                    max_sentences_per_line=max_sentences_per_line,
+                )
+                if formatted_text:
+                    lines.extend(formatted_text.split('\n'))
             continue
 
         for word_info in alternative.words:
             speaker_tag = word_info.speaker_label
-            # speaker_label is a string like "1", "2", etc.
             try:
                 speaker_num = int(speaker_tag) if speaker_tag else None
             except (ValueError, TypeError):
@@ -57,35 +164,34 @@ def format_diarized_transcript(results: list[cloud_speech.SpeechRecognitionResul
             word = word_info.word
 
             if speaker_num != current_speaker:
-                # Flush current speaker's words
-                if current_words and current_speaker is not None:
-                    lines.append(f"Speaker {current_speaker}: {' '.join(current_words)}")
-                elif current_words:
-                    lines.append(' '.join(current_words))
+                _flush_turn(current_speaker, current_words)
                 current_words = [word]
                 current_speaker = speaker_num
             else:
                 current_words.append(word)
 
     # Flush remaining words
-    if current_words and current_speaker is not None:
-        lines.append(f"Speaker {current_speaker}: {' '.join(current_words)}")
-    elif current_words:
-        lines.append(' '.join(current_words))
+    _flush_turn(current_speaker, current_words)
 
     return '\n'.join(lines)
 
 
-def format_plain_transcript(results: list[cloud_speech.SpeechRecognitionResult]) -> str:
+def format_plain_transcript(
+    results: list[cloud_speech.SpeechRecognitionResult],
+    max_chars_per_line: int = TRANSCRIPTION_MAX_CHARS_PER_LINE,
+    max_sentences_per_line: int = TRANSCRIPTION_MAX_SENTENCES_PER_LINE,
+) -> str:
     """
-    Concatenate transcript segments into plain text.
+    Concatenate transcript segments into plain text formatted at sentence boundaries.
     No speaker labels available (used for Dutch).
 
     Args:
         results: List of SpeechRecognitionResult from the API response.
+        max_chars_per_line: Target maximum character length per line.
+        max_sentences_per_line: Target maximum sentences per line.
 
     Returns:
-        Plain transcript text.
+        Plain transcript text split cleanly into readable lines.
     """
     if not results:
         return ""
@@ -98,7 +204,12 @@ def format_plain_transcript(results: list[cloud_speech.SpeechRecognitionResult])
         if transcript:
             segments.append(transcript)
 
-    return ' '.join(segments)
+    raw_text = ' '.join(segments)
+    return format_transcript_lines(
+        raw_text,
+        max_chars_per_line=max_chars_per_line,
+        max_sentences_per_line=max_sentences_per_line,
+    )
 
 
 def _extract_results_from_response(

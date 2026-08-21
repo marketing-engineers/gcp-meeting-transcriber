@@ -7,9 +7,43 @@ import pytest
 from src.transcript_output import (
     format_diarized_transcript,
     format_plain_transcript,
+    format_transcript_lines,
     stitch_diarized_transcripts,
     stitch_plain_transcripts,
 )
+
+
+class TestFormatTranscriptLines:
+    """Tests for format_transcript_lines helper."""
+
+    def test_empty_string(self):
+        assert format_transcript_lines("") == ""
+        assert format_transcript_lines("   ") == ""
+
+    def test_sentence_splitting_and_line_wrapping(self):
+        text = "This is sentence one. This is sentence two. This is sentence three. This is sentence four."
+        formatted = format_transcript_lines(text, max_chars_per_line=50, max_sentences_per_line=2)
+        lines = formatted.split("\n")
+        assert len(lines) >= 2
+        for line in lines:
+            assert len(line) <= 50
+
+    def test_max_sentences_per_line_cap(self):
+        text = "One. Two. Three. Four. Five."
+        formatted = format_transcript_lines(text, max_chars_per_line=200, max_sentences_per_line=2)
+        lines = formatted.split("\n")
+        assert len(lines) == 3
+        assert lines[0] == "One. Two."
+        assert lines[1] == "Three. Four."
+        assert lines[2] == "Five."
+
+    def test_long_single_sentence_word_wrapping(self):
+        long_sentence = "Word " * 30  # 150 chars sentence without punctuation
+        formatted = format_transcript_lines(long_sentence, max_chars_per_line=50)
+        lines = formatted.split("\n")
+        assert len(lines) > 1
+        for line in lines:
+            assert len(line) <= 50
 
 
 def _make_word(word: str, speaker_label: str) -> MagicMock:
@@ -46,6 +80,25 @@ class TestFormatDiarizedTranscript:
         result = _make_result(words=words)
         output = format_diarized_transcript([result])
         assert output == "Speaker 1: Hello world"
+
+    def test_speaker_turn_line_wrapping(self):
+        """Long speaker turns wrap onto new lines without re-stamping Speaker label."""
+        words = [
+            _make_word("This", "1"),
+            _make_word("is", "1"),
+            _make_word("sentence", "1"),
+            _make_word("one.", "1"),
+            _make_word("This", "1"),
+            _make_word("is", "1"),
+            _make_word("sentence", "1"),
+            _make_word("two.", "1"),
+        ]
+        result = _make_result(words=words)
+        output = format_diarized_transcript([result], max_chars_per_line=25)
+        lines = output.split("\n")
+        assert lines[0] == "Speaker 1: This is sentence one."
+        assert lines[1] == "This is sentence two."
+        assert not lines[1].startswith("Speaker 1:")
 
     def test_speaker_change(self):
         """Speaker change creates new line."""
