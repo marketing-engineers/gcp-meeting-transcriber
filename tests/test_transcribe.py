@@ -119,3 +119,37 @@ class TestTranscribeSingleFile:
 
         assert res == mock_resp
         mock_tf.assert_called_once()
+
+
+class TestBuildRecognitionConfig:
+    """Tests for _build_recognition_config including CustomPromptConfig rules."""
+
+    @patch("src.config.TRANSCRIPTION_CUSTOM_PROMPT", "Test custom prompt instruction")
+    def test_chirp_model_uses_custom_prompt(self):
+        """Chirp model includes CustomPromptConfig when TRANSCRIPTION_CUSTOM_PROMPT is set."""
+        from src.transcribe import _build_recognition_config
+        config = _build_recognition_config(
+            lang="nl-NL",
+            model="chirp_3",
+            enable_diarization=False,
+            speaker_count=None,
+        )
+        assert config.features.custom_prompt_config is not None
+        assert config.features.custom_prompt_config.custom_prompt == "Test custom prompt instruction"
+
+    @patch("src.config.TRANSCRIPTION_CUSTOM_PROMPT", "Test custom prompt instruction")
+    def test_non_chirp_model_omits_custom_prompt_and_logs_warning(self, caplog):
+        """Non-Chirp model omits CustomPromptConfig and logs a warning when prompt is set."""
+        from src.transcribe import _build_recognition_config
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            config = _build_recognition_config(
+                lang="nl-NL",
+                model="long",
+                enable_diarization=False,
+                speaker_count=None,
+            )
+        assert not config.features.custom_prompt_config.custom_prompt
+        assert "only supported for Chirp models" in caplog.text
+

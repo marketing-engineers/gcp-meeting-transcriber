@@ -1,85 +1,6 @@
 """Google Cloud Speech-to-Text V2 BatchRecognize integration using Chirp 3."""
 
 import logging
-from typing import Any
-
-from google.api_core.client_options import ClientOptions
-from google.api_core import exceptions as gcp_exceptions
-from google.cloud.speech_v2 import SpeechClient
-from google.cloud.speech_v2.types import cloud_speech
-
-from src.audio import ProcessingError
-
-logger = logging.getLogger(__name__)
-
-# BatchRecognize accepts max 15 files per request
-_MAX_FILES_PER_BATCH = 15
-
-
-def _build_recognition_config(
-    lang: str,
-    model: str,
-    enable_diarization: bool,
-    speaker_count: int | None,
-) -> cloud_speech.RecognitionConfig:
-    """
-    Build the RecognitionConfig for a BatchRecognize request.
-
-    Args:
-        lang: Language code (e.g., "en-US", "nl-NL").
-        model: Model name (e.g., "chirp_3").
-        enable_diarization: Whether to enable speaker diarization.
-        speaker_count: Number of speakers hint. None = auto-detect.
-
-    Returns:
-        Configured RecognitionConfig.
-    """
-    features_kwargs: dict[str, Any] = {
-        "enable_automatic_punctuation": True,
-    }
-
-    if enable_diarization:
-        if speaker_count is not None:
-            diarization_config = cloud_speech.SpeakerDiarizationConfig(
-                min_speaker_count=speaker_count,
-                max_speaker_count=speaker_count,
-            )
-        else:
-            # Empty config = Chirp 3 auto-detects speaker count
-            diarization_config = cloud_speech.SpeakerDiarizationConfig()
-
-        features_kwargs["diarization_config"] = diarization_config
-
-    config = cloud_speech.RecognitionConfig(
-        auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-        language_codes=[lang],
-        model=model,
-        features=cloud_speech.RecognitionFeatures(**features_kwargs),
-    )
-    return config
-
-
-def _get_speech_client(region: str) -> SpeechClient:
-    """Create a Speech-to-Text V2 client with the regional endpoint."""
-    from src.config import GCP_PROJECT_ID
-    api_endpoint = f"{region}-speech.googleapis.com"
-    client_options = ClientOptions(
-        api_endpoint=api_endpoint,
-        quota_project_id=GCP_PROJECT_ID,
-    )
-    try:
-        return SpeechClient(client_options=client_options)
-    except Exception as e:
-        raise ProcessingError(
-            f"Failed to create Speech-to-Text client (endpoint: {api_endpoint}).\n"
-            f"Ensure you have authenticated: gcloud auth application-default login\n"
-            f"Original error: {e}"
-        ) from e
-
-
-"""Google Cloud Speech-to-Text V2 BatchRecognize integration using Chirp 3."""
-
-import logging
 import time
 from typing import Any
 
@@ -130,6 +51,19 @@ def _build_recognition_config(
             diarization_config = cloud_speech.SpeakerDiarizationConfig()
 
         features_kwargs["diarization_config"] = diarization_config
+
+    from src.config import TRANSCRIPTION_CUSTOM_PROMPT
+    if TRANSCRIPTION_CUSTOM_PROMPT:
+        if "chirp" in model.lower():
+            features_kwargs["custom_prompt_config"] = cloud_speech.CustomPromptConfig(
+                custom_prompt=TRANSCRIPTION_CUSTOM_PROMPT
+            )
+        else:
+            logger.warning(
+                "TRANSCRIPTION_CUSTOM_PROMPT is only supported for Chirp models (current model: %s). "
+                "Omitting custom prompt.",
+                model,
+            )
 
     config = cloud_speech.RecognitionConfig(
         auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
