@@ -56,6 +56,7 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID and `GCS_BUCKET_NAME` with your bucket name.*
 
    Key environment variables:
+   - `TRANSCRIPTION_MODEL` (Default: `chirp_3`): Google Cloud Speech-to-Text V2 model identifier. Defaults to `chirp_3`, with support for all GCP V2 models including `chirp_2`, `chirp`, `long`, `short`, and `telephony`.
    - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted and monitored concurrently per wave.
    - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` (Default: `2700` / 45 min): Maximum chunk duration ceiling for Dutch recordings.
    - `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Maximum chunk duration ceiling for English recordings.
