@@ -191,3 +191,36 @@ class TestBuildRecognitionConfig:
         assert not config.features.custom_prompt_config.custom_prompt
         assert "only supported for Chirp models" in caplog.text
 
+
+class TestFormatAsciiMatrix:
+    """Tests for format_ascii_matrix rendering."""
+
+    def test_format_ascii_matrix_rendering(self):
+        """ASCII matrix produces expected box structure and counts."""
+        from src.transcribe import format_ascii_matrix
+
+        statuses = {
+            1: "completed",
+            2: "completed",
+            3: "in_progress",
+            4: "pending",
+            5: "pending",
+        }
+        output = format_ascii_matrix(
+            total_chunks=5,
+            chunk_statuses=statuses,
+            current_batch=1,
+            total_batches=1,
+            elapsed_seconds=30,
+            columns=5,
+        )
+
+        assert "[TRANSCRIPTION MATRIX] Batch 1/1 | Completed: 2/5 (40%) | Elapsed: 30s" in output
+        assert "01 [●]" in output
+        assert "02 [●]" in output
+        assert "03 [◌]" in output
+        assert "04 [·]" in output
+        assert "05 [·]" in output
+        assert "Legend:" in output
+
+

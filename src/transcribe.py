@@ -92,6 +92,69 @@ def _get_speech_client(region: str) -> SpeechClient:
         ) from e
 
 
+def format_ascii_matrix(
+    total_chunks: int,
+    chunk_statuses: dict[int, str],
+    current_batch: int,
+    total_batches: int,
+    elapsed_seconds: int,
+    columns: int = 5,
+) -> str:
+    """
+    Renders an ASCII status matrix representing all transcription chunks and their progress.
+
+    Args:
+        total_chunks: Total number of chunks in the transcription job.
+        chunk_statuses: Dictionary mapping chunk index (1-based) to status string
+                        ('pending', 'in_progress', 'completed', 'error').
+        current_batch: Current batch index (1-based).
+        total_batches: Total number of batches.
+        elapsed_seconds: Total elapsed seconds since transcription started.
+        columns: Number of chunk cells per row in the matrix display.
+
+    Returns:
+        Formatted multi-line ASCII box string.
+    """
+    completed_count = sum(1 for s in chunk_statuses.values() if s == "completed")
+    pct = int((completed_count / total_chunks) * 100) if total_chunks > 0 else 100
+
+    status_symbols = {
+        "completed": "[●]",
+        "in_progress": "[◌]",
+        "pending": "[·]",
+        "error": "[!]",
+    }
+
+    header = (
+        f"[TRANSCRIPTION MATRIX] Batch {current_batch}/{total_batches} | "
+        f"Completed: {completed_count}/{total_chunks} ({pct}%) | "
+        f"Elapsed: {elapsed_seconds}s"
+    )
+
+    rows: list[str] = []
+    current_row: list[str] = []
+    for i in range(1, total_chunks + 1):
+        status = chunk_statuses.get(i, "pending")
+        sym = status_symbols.get(status, "[·]")
+        cell = f"{i:02d} {sym}"
+        current_row.append(cell)
+        if len(current_row) == columns:
+            rows.append("   ".join(current_row))
+            current_row = []
+    if current_row:
+        rows.append("   ".join(current_row))
+
+    max_row_len = max(len(r) for r in rows) if rows else 30
+    box_width = max(max_row_len + 4, len(header) + 4)
+
+    top = "┌" + "─" * (box_width - 2) + "┐"
+    bottom = "└" + "─" * (box_width - 2) + "┘"
+    body = "\n".join("│  " + r.ljust(box_width - 6) + "  │" for r in rows)
+    legend = "Legend: [●] Done   [◌] Processing   [·] Queued"
+
+    return f"{header}\n{top}\n{body}\n{bottom}\n{legend}"
+
+
 def transcribe_single_file(
     gcs_uri: str,
     lang: str,
@@ -198,6 +261,7 @@ def transcribe_files(
     )
 
     all_responses: list[cloud_speech.BatchRecognizeResponse] = []
+    chunk_statuses: dict[int, str] = {i: "pending" for i in range(1, total_files + 1)}
     start_time = time.time()
 
     for batch_num, batch_start in enumerate(range(0, total_files, effective_batch_size), start=1):
@@ -212,6 +276,7 @@ def transcribe_files(
         try:
             for offset, uri in enumerate(batch_uris):
                 global_index = batch_start + offset + 1
+                chunk_statuses[global_index] = "in_progress"
                 request = cloud_speech.BatchRecognizeRequest(
                     recognizer=recognizer,
                     config=config,
@@ -229,7 +294,7 @@ def transcribe_files(
                     "completed_response": None,
                 })
                 # Small pause between submissions to prevent burst rate-limit rejection
-                if offset < len(batch_uris) - 1:
+                if offset < len(batch_uris) - 1 and poll_interval > 0:
                     time.sleep(1)
         except gcp_exceptions.InvalidArgument as e:
             raise ProcessingError(
@@ -253,6 +318,10 @@ def transcribe_files(
             len(pending_items), batch_num, effective_max_timeout,
         )
 
+        # Initial wait before first polling check to allow backend workers to initialize
+        if poll_interval > 0:
+            time.sleep(min(15, poll_interval))
+
         while True:
             total_elapsed = time.time() - start_time
             if total_elapsed > effective_max_timeout:
@@ -261,46 +330,70 @@ def transcribe_files(
                 )
 
             all_done = True
-            progress_reports: list[str] = []
 
             for item in pending_items:
                 if item["completed_response"] is not None:
-                    progress_reports.append(f"Chunk {item['chunk_index']}: Completed")
                     continue
 
                 op = item["operation"]
 
+                # Pacing between individual status checks to prevent burst query rates
+                if poll_interval > 0:
+                    time.sleep(0.2)
+
                 try:
                     if op.done():
                         item["completed_response"] = op.result()
-                        progress_reports.append(f"Chunk {item['chunk_index']}: Completed")
+                        chunk_statuses[item["chunk_index"]] = "completed"
                         continue
                 except gcp_exceptions.ResourceExhausted:
-                    logger.warning(
-                        "Chunk %d: Hit 429 ResourceExhausted when checking status. Retrying in %ds.",
+                    logger.debug(
+                        "Chunk %d: transient 429 ResourceExhausted on status poll, will retry in %ds.",
                         item["chunk_index"], poll_interval,
                     )
                 except Exception as e:
+                    chunk_statuses[item["chunk_index"]] = "error"
                     raise ProcessingError(
                         f"Transcription failed for Chunk {item['chunk_index']} ({item['gcs_uri']}).\n"
                         f"Original error: {e}"
                     ) from e
 
                 all_done = False
-                progress_reports.append(f"Chunk {item['chunk_index']}: In Progress")
+
+            batch_completed = sum(1 for it in pending_items if it["completed_response"] is not None)
+            total_completed = sum(1 for s in chunk_statuses.values() if s == "completed")
+            pct = int((total_completed / total_files) * 100) if total_files > 0 else 100
+            matrix_str = format_ascii_matrix(
+                total_chunks=total_files,
+                chunk_statuses=chunk_statuses,
+                current_batch=batch_num,
+                total_batches=num_batches,
+                elapsed_seconds=int(total_elapsed),
+            )
+
+            logger.info(
+                "Batch %d/%d: %d/%d chunks completed (Total progress: %d/%d - %d%%)\n%s",
+                batch_num, num_batches, batch_completed, len(batch_uris), total_completed, total_files, pct, matrix_str,
+            )
 
             if all_done:
                 break
 
-            logger.info("Progress (%ds elapsed): %s", int(total_elapsed), " | ".join(progress_reports))
             time.sleep(poll_interval)
 
         for item in pending_items:
             all_responses.append(item["completed_response"])
 
-        if batch_num < num_batches:
+        if batch_num < num_batches and poll_interval > 0:
             time.sleep(2)
 
     total_time = int(time.time() - start_time)
-    logger.info("All %d file(s) transcribed successfully in %ds.", total_files, total_time)
+    final_matrix = format_ascii_matrix(
+        total_chunks=total_files,
+        chunk_statuses=chunk_statuses,
+        current_batch=num_batches,
+        total_batches=num_batches,
+        elapsed_seconds=total_time,
+    )
+    logger.info("All %d file(s) transcribed successfully in %ds.\n%s", total_files, total_time, final_matrix)
     return all_responses
