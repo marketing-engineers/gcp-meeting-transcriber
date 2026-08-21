@@ -1,4 +1,4 @@
-"""Tests for src/config.py — config loading, validation, defaults."""
+"""Tests for src/config.py — config loading, validation, defaults, and migration guard."""
 
 import os
 from unittest.mock import patch
@@ -53,6 +53,15 @@ def test_get_int_invalid_falls_back():
     assert result == 42
 
 
+def test_get_float_valid():
+    """_get_float parses a valid float from env."""
+    from src.config import _get_float
+
+    with patch.dict(os.environ, {"TEST_FLOAT_KEY": "15.5"}):
+        result = _get_float("TEST_FLOAT_KEY", 25.0)
+    assert result == 15.5
+
+
 def test_validate_extension_supported():
     """validate_extension returns True for supported extensions."""
     from src.config import validate_extension
@@ -96,10 +105,11 @@ def test_gcs_upload_timeout_default():
         assert _get_int("GCS_UPLOAD_TIMEOUT_SECONDS", 600) == 600
 
 
-def test_chunk_length_seconds_dutch_loaded():
-    """Verify CHUNK_LENGTH_SECONDS_DUTCH is correctly loaded from src.config."""
-    from src.config import CHUNK_LENGTH_SECONDS_DUTCH
-    assert CHUNK_LENGTH_SECONDS_DUTCH in [300, 900]  # Depends on active .env file, but should be defined
+def test_chunk_max_length_config_loaded():
+    """Verify CHUNK_MAX_LENGTH_SECONDS_DUTCH and CHUNK_MAX_LENGTH_SECONDS_ENGLISH are loaded."""
+    from src.config import CHUNK_MAX_LENGTH_SECONDS_DUTCH, CHUNK_MAX_LENGTH_SECONDS_ENGLISH
+    assert CHUNK_MAX_LENGTH_SECONDS_DUTCH == 2700
+    assert CHUNK_MAX_LENGTH_SECONDS_ENGLISH == 2700
 
 
 def test_line_formatting_config_defaults():
@@ -111,6 +121,24 @@ def test_line_formatting_config_defaults():
     )
     assert isinstance(TRANSCRIPTION_MAX_CHARS_PER_LINE, int)
     assert isinstance(TRANSCRIPTION_MAX_SENTENCES_PER_LINE, int)
-    # TRANSCRIPTION_CUSTOM_PROMPT can be None or str depending on .env
     assert TRANSCRIPTION_CUSTOM_PROMPT is None or isinstance(TRANSCRIPTION_CUSTOM_PROMPT, str)
 
+
+@pytest.mark.parametrize(
+    "legacy_key,new_key",
+    [
+        ("CHUNK_LENGTH_SECONDS_DUTCH", "CHUNK_MAX_LENGTH_SECONDS_DUTCH"),
+        ("CHUNK_LENGTH_SECONDS_ENGLISH", "CHUNK_MAX_LENGTH_SECONDS_ENGLISH"),
+        ("TRANSCRIPTION_BATCH_SIZE", "TRANSCRIPTION_CONCURRENCY"),
+    ],
+)
+def test_migration_guard_raises_on_legacy_key(legacy_key, new_key):
+    """Presence of any legacy key raises ValueError naming both old and new key."""
+    from src.config import _check_migration_guard
+
+    with patch.dict(os.environ, {legacy_key: "500"}, clear=False):
+        with pytest.raises(ValueError) as exc_info:
+            _check_migration_guard()
+        err_msg = str(exc_info.value)
+        assert legacy_key in err_msg
+        assert new_key in err_msg

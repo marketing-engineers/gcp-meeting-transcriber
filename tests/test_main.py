@@ -2,7 +2,6 @@
 
 import sys
 from unittest.mock import patch, MagicMock
-from io import StringIO
 
 import pytest
 
@@ -99,7 +98,6 @@ class TestCLIArgumentParsing:
 
     def test_prepare_only_flag_accepted(self):
         """--prepare-only flag is parsed correctly."""
-        import argparse
         from src.main import main
 
         test_args = ["prog", "input.mp4", "--lang", "en-us", "--prepare-only"]
@@ -161,6 +159,9 @@ class TestProcessFileDutchRoute:
     @patch("src.main.validate_gcp_config")
     @patch("src.main.extract_audio_to_flac")
     @patch("src.main.get_audio_duration")
+    @patch("src.main.detect_silences", return_value=[])
+    @patch("src.main.compute_chunk_boundaries", return_value=[])
+    @patch("src.main.split_flac")
     @patch("src.main.upload_to_gcs")
     @patch("src.main.transcribe_single_file")
     @patch("src.main.stitch_plain_transcripts")
@@ -169,11 +170,11 @@ class TestProcessFileDutchRoute:
     @patch("src.main.os.remove")
     def test_dutch_monolithic_route(
         self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
-        mock_transcribe, mock_upload, mock_duration, mock_extract,
-        mock_validate_gcp, mock_validate_ext, mock_exists
+        mock_transcribe, mock_upload, mock_split, mock_boundaries, mock_silences,
+        mock_duration, mock_extract, mock_validate_gcp, mock_validate_ext, mock_exists
     ):
-        """Dutch file <= CHUNK_LENGTH_SECONDS_DUTCH goes through monolithic route."""
-        mock_duration.return_value = 200.0  # 3.3 minutes (within 5-min default threshold)
+        """Short Dutch file (compute_chunk_boundaries returns []) goes monolithic without split_flac."""
+        mock_duration.return_value = 500.0
         mock_upload.return_value = "gs://bucket/prefix/file.flac"
         mock_transcribe.return_value = MagicMock()
         mock_stitch.return_value = "transcribed text"
@@ -183,6 +184,10 @@ class TestProcessFileDutchRoute:
 
         mock_extract.assert_called_once()
         mock_duration.assert_called_once()
+        mock_boundaries.assert_called_once()
+        # Verify Dutch passes target_parallelism (concurrency)
+        assert mock_boundaries.call_args[1]["target_parallelism"] == 5
+        mock_split.assert_not_called()
         mock_upload.assert_called_once()
         mock_transcribe.assert_called_once()
         mock_stitch.assert_called_once()
@@ -195,6 +200,8 @@ class TestProcessFileDutchRoute:
     @patch("src.main.validate_gcp_config")
     @patch("src.main.extract_audio_to_flac")
     @patch("src.main.get_audio_duration")
+    @patch("src.main.detect_silences", return_value=[(1490.0, 1492.0)])
+    @patch("src.main.compute_chunk_boundaries", return_value=[1491.0, 2980.0])
     @patch("src.main.split_flac")
     @patch("src.main.upload_files_to_gcs")
     @patch("src.main.transcribe_files")
@@ -204,14 +211,14 @@ class TestProcessFileDutchRoute:
     @patch("src.main.os.remove")
     def test_dutch_chunked_route(
         self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
-        mock_transcribe, mock_upload_files, mock_split, mock_duration, mock_extract,
-        mock_validate_gcp, mock_validate_ext, mock_exists
+        mock_transcribe, mock_upload_files, mock_split, mock_boundaries, mock_silences,
+        mock_duration, mock_extract, mock_validate_gcp, mock_validate_ext, mock_exists
     ):
-        """Dutch file > CHUNK_LENGTH_SECONDS_DUTCH goes through chunked route."""
-        mock_duration.return_value = 1800.0  # 30 minutes (exceeds 5-min default threshold)
-        mock_split.return_value = ["chunk1.flac", "chunk2.flac"]
-        mock_upload_files.return_value = ["gs://b/p/c1.flac", "gs://b/p/c2.flac"]
-        mock_transcribe.return_value = [MagicMock(), MagicMock()]
+        """Long Dutch file (boundaries returned) calls split_flac and transcribe_files."""
+        mock_duration.return_value = 4500.0
+        mock_split.return_value = ["chunk1.flac", "chunk2.flac", "chunk3.flac"]
+        mock_upload_files.return_value = ["gs://b/p/c1.flac", "gs://b/p/c2.flac", "gs://b/p/c3.flac"]
+        mock_transcribe.return_value = [MagicMock(), MagicMock(), MagicMock()]
         mock_stitch.return_value = "stitched text"
         mock_save_tr.return_value = ("txt_path", "json_path")
 
@@ -219,48 +226,98 @@ class TestProcessFileDutchRoute:
 
         mock_extract.assert_called_once()
         mock_duration.assert_called_once()
-        mock_split.assert_called_once()
+        mock_boundaries.assert_called_once()
+        mock_split.assert_called_once_with(
+            "output/input_nl-nl.flac", "output", "input", [1491.0, 2980.0]
+        )
         mock_upload_files.assert_called_once()
         mock_transcribe.assert_called_once()
         mock_stitch.assert_called_once()
         mock_save_tr.assert_called_once()
         mock_delete_gcs.assert_called_once()
-        # Should clean up chunks + original file
-        assert mock_remove.call_count == 3
+        # Clean up 3 chunks + monolithic flac
+        assert mock_remove.call_count == 4
+
+
+class TestProcessFileEnglishRoute:
+    """Tests for process_file routing through English route."""
 
     @patch("src.main.os.path.exists", return_value=True)
     @patch("src.main.validate_extension", return_value=True)
+    @patch("src.main.validate_gcp_config")
     @patch("src.main.extract_audio_to_flac")
     @patch("src.main.get_audio_duration")
-    @patch("src.main.os.remove")
-    def test_dutch_monolithic_prepare_only(
-        self, mock_remove, mock_duration, mock_extract, mock_validate_ext, mock_exists
-    ):
-        """Dutch file <= CHUNK_LENGTH_SECONDS_DUTCH in prepare_only returns early without upload or cleanup."""
-        mock_duration.return_value = 200.0
-
-        process_file("input.mp4", "nl-nl", prepare_only=True)
-
-        mock_extract.assert_called_once()
-        mock_duration.assert_called_once()
-        mock_remove.assert_not_called()
-
-    @patch("src.main.os.path.exists", return_value=True)
-    @patch("src.main.validate_extension", return_value=True)
-    @patch("src.main.extract_audio_to_flac")
-    @patch("src.main.get_audio_duration")
+    @patch("src.main.detect_silences", return_value=[])
+    @patch("src.main.compute_chunk_boundaries", return_value=[])
     @patch("src.main.split_flac")
+    @patch("src.main._prompt_speaker_count", return_value=2)
+    @patch("src.main.upload_to_gcs")
+    @patch("src.main.transcribe_single_file")
+    @patch("src.main.stitch_diarized_transcripts")
+    @patch("src.main.save_transcript")
+    @patch("src.main.delete_gcs_prefix")
     @patch("src.main.os.remove")
-    def test_dutch_chunked_prepare_only(
-        self, mock_remove, mock_split, mock_duration, mock_extract, mock_validate_ext, mock_exists
+    def test_english_monolithic_route(
+        self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
+        mock_transcribe, mock_upload, mock_prompt, mock_split, mock_boundaries, mock_silences,
+        mock_duration, mock_extract, mock_validate_gcp, mock_validate_ext, mock_exists
     ):
-        """Dutch file > CHUNK_LENGTH_SECONDS_DUTCH in prepare_only chunks and cleans up only monolithic flac."""
-        mock_duration.return_value = 1800.0
-        mock_split.return_value = ["chunk1.flac", "chunk2.flac"]
+        """Short English file takes monolithic path with diarization."""
+        mock_duration.return_value = 800.0
+        mock_upload.return_value = "gs://b/p/file.flac"
+        mock_transcribe.return_value = MagicMock()
+        mock_stitch.return_value = "speaker transcript"
+        mock_save_tr.return_value = ("txt_path", "json_path")
 
-        process_file("input.mp4", "nl-nl", prepare_only=True)
+        process_file("input.mp4", "en-us", prepare_only=False)
 
         mock_extract.assert_called_once()
-        mock_duration.assert_called_once()
-        mock_split.assert_called_once()
-        mock_remove.assert_called_once()  # Cleans up monolithic file
+        mock_boundaries.assert_called_once()
+        # English passes target_parallelism=None
+        assert mock_boundaries.call_args[1]["target_parallelism"] is None
+        mock_split.assert_not_called()
+        mock_upload.assert_called_once()
+        mock_transcribe.assert_called_once()
+        mock_stitch.assert_called_once()
+        mock_remove.assert_called_once()
+
+    @patch("src.main.os.path.exists", return_value=True)
+    @patch("src.main.validate_extension", return_value=True)
+    @patch("src.main.validate_gcp_config")
+    @patch("src.main.extract_audio_to_flac")
+    @patch("src.main.get_audio_duration")
+    @patch("src.main.detect_silences", return_value=[])
+    @patch("src.main.compute_chunk_boundaries", return_value=[2600.0])
+    @patch("src.main.split_flac")
+    @patch("src.main._prompt_speaker_count", return_value=3)
+    @patch("src.main.upload_files_to_gcs")
+    @patch("src.main.transcribe_files")
+    @patch("src.main.stitch_diarized_transcripts")
+    @patch("src.main.save_transcript")
+    @patch("src.main.delete_gcs_prefix")
+    @patch("src.main.os.remove")
+    def test_english_chunked_route(
+        self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
+        mock_transcribe, mock_upload_files, mock_prompt, mock_split, mock_boundaries, mock_silences,
+        mock_duration, mock_extract, mock_validate_gcp, mock_validate_ext, mock_exists
+    ):
+        """Long English file takes chunked path with diarization."""
+        mock_duration.return_value = 5000.0
+        mock_split.return_value = ["chunk1.flac", "chunk2.flac"]
+        mock_upload_files.return_value = ["gs://b/p/c1.flac", "gs://b/p/c2.flac"]
+        mock_transcribe.return_value = [MagicMock(), MagicMock()]
+        mock_stitch.return_value = "stitched diarized text"
+        mock_save_tr.return_value = ("txt_path", "json_path")
+
+        process_file("input.mp4", "en-us", prepare_only=False)
+
+        mock_extract.assert_called_once()
+        mock_boundaries.assert_called_once()
+        assert mock_boundaries.call_args[1]["target_parallelism"] is None
+        mock_split.assert_called_once_with(
+            "output/input_en-us.flac", "output", "input", [2600.0]
+        )
+        mock_upload_files.assert_called_once()
+        mock_transcribe.assert_called_once()
+        mock_stitch.assert_called_once()
+        assert mock_remove.call_count == 3  # 2 chunks + monolithic flac

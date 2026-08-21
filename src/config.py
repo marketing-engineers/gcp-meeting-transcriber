@@ -8,6 +8,29 @@ logger = logging.getLogger(__name__)
 # Load environment variables from .env file
 load_dotenv()
 
+_LEGACY_KEYS = {
+    "CHUNK_LENGTH_SECONDS_DUTCH": "CHUNK_MAX_LENGTH_SECONDS_DUTCH",
+    "CHUNK_LENGTH_SECONDS_ENGLISH": "CHUNK_MAX_LENGTH_SECONDS_ENGLISH",
+    "TRANSCRIPTION_BATCH_SIZE": "TRANSCRIPTION_CONCURRENCY",
+}
+
+
+def _check_migration_guard() -> None:
+    """Checks for deprecated legacy keys in the environment and raises ValueError if found."""
+    detected_legacy: list[str] = []
+    for old_key, new_key in _LEGACY_KEYS.items():
+        if old_key in os.environ:
+            detected_legacy.append(f"'{old_key}' (renamed to '{new_key}')")
+    if detected_legacy:
+        raise ValueError(
+            f"Detected deprecated configuration key(s) in environment:\n"
+            + "\n".join(f"  - {item}" for item in detected_legacy)
+            + "\nPlease update your .env file to use the new configuration keys."
+        )
+
+
+_check_migration_guard()
+
 
 def _get_csv_list(key: str, default: str) -> list[str]:
     """Parses a comma-separated environment variable into a list of stripped, lowercase strings."""
@@ -22,6 +45,16 @@ def _get_int(key: str, default: int) -> int:
         return int(raw)
     except ValueError:
         logger.error("%s must be an integer. Falling back to %d.", key, default)
+        return default
+
+
+def _get_float(key: str, default: float) -> float:
+    """Retrieves a float environment variable, falling back to a default on parse failure."""
+    raw = os.environ.get(key, str(default))
+    try:
+        return float(raw)
+    except ValueError:
+        logger.error("%s must be a float. Falling back to %f.", key, default)
         return default
 
 
@@ -40,8 +73,16 @@ def _get_optional_str(key: str) -> str | None:
 # Audio Processing Configuration
 # ---------------------------------------------------------------------------
 
-CHUNK_LENGTH_SECONDS_ENGLISH: int = _get_int("CHUNK_LENGTH_SECONDS_ENGLISH", 900)
-CHUNK_LENGTH_SECONDS_DUTCH: int = _get_int("CHUNK_LENGTH_SECONDS_DUTCH", 300)
+CHUNK_MAX_LENGTH_SECONDS_DUTCH: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_DUTCH", 2700)
+CHUNK_MAX_LENGTH_SECONDS_ENGLISH: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_ENGLISH", 2700)
+CHUNK_MIN_LENGTH_SECONDS: int = _get_int("CHUNK_MIN_LENGTH_SECONDS", 600)
+CHUNK_SILENCE_SEARCH_WINDOW_SECONDS: float = _get_float("CHUNK_SILENCE_SEARCH_WINDOW_SECONDS", 15.0)
+CHUNK_SILENCE_NOISE_THRESHOLD_DB: int = _get_int("CHUNK_SILENCE_NOISE_THRESHOLD_DB", -30)
+CHUNK_SILENCE_MIN_DURATION_SECONDS: float = _get_float("CHUNK_SILENCE_MIN_DURATION_SECONDS", 0.5)
+
+CHUNK_OVERHEAD_SECONDS: int = _get_int("CHUNK_OVERHEAD_SECONDS", 15)
+CHUNK_REALTIME_FACTOR: float = _get_float("CHUNK_REALTIME_FACTOR", 25.0)
+
 SUPPORTED_EXTENSIONS: list[str] = _get_csv_list("SUPPORTED_EXTENSIONS", ".mp4,.m4a,.wav,.mov,.mkv")
 
 # Language Routing (Group-first naming, plural for lists)
@@ -65,8 +106,7 @@ GCP_PROJECT_ID: str | None = _get_optional_str("GCP_PROJECT_ID")
 GCS_BUCKET_NAME: str | None = _get_optional_str("GCS_BUCKET_NAME")
 GCP_REGION: str = _get_str("GCP_REGION", "eu")
 TRANSCRIPTION_MODEL: str = _get_str("TRANSCRIPTION_MODEL", "chirp_3")
-TRANSCRIPTION_BATCH_SIZE: int = _get_int("TRANSCRIPTION_BATCH_SIZE", 5)
-TRANSCRIPTION_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_TIMEOUT_SECONDS", 1800)
+TRANSCRIPTION_CONCURRENCY: int = _get_int("TRANSCRIPTION_CONCURRENCY", 5)
 TRANSCRIPTION_MAX_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_MAX_TIMEOUT_SECONDS", 1800)
 GCS_UPLOAD_TIMEOUT_SECONDS: int = _get_int("GCS_UPLOAD_TIMEOUT_SECONDS", 600)
 TRANSCRIPTION_CUSTOM_PROMPT: str | None = _get_optional_str("TRANSCRIPTION_CUSTOM_PROMPT")

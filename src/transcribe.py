@@ -1,6 +1,7 @@
 """Google Cloud Speech-to-Text V2 BatchRecognize integration using Chirp 3."""
 
 import logging
+import math
 import time
 from typing import Any
 
@@ -10,12 +11,14 @@ from google.cloud.speech_v2 import SpeechClient
 from google.cloud.speech_v2.types import cloud_speech
 
 from src.audio import ProcessingError
-from src.config import TRANSCRIPTION_BATCH_SIZE, TRANSCRIPTION_MAX_TIMEOUT_SECONDS
+from src.config import (
+    CHUNK_OVERHEAD_SECONDS,
+    CHUNK_REALTIME_FACTOR,
+    TRANSCRIPTION_CONCURRENCY,
+    TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
-
-# BatchRecognize accepts max 15 files per request
-_MAX_FILES_PER_BATCH = 15
 
 
 def _build_recognition_config(
@@ -165,6 +168,8 @@ def transcribe_single_file(
     model: str,
     timeout: int | None = None,
     max_timeout: int = TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+    total_audio_seconds: float | None = None,
+    chunk_duration: float | None = None,
 ) -> cloud_speech.BatchRecognizeResponse:
     """
     Submit a single-file BatchRecognize request and wait for results using transcribe_files.
@@ -179,6 +184,8 @@ def transcribe_single_file(
         model: Recognition model name.
         timeout: Legacy parameter for backward compatibility (maps to max_timeout if set).
         max_timeout: Maximum allowable time cap in seconds.
+        total_audio_seconds: Total duration of the audio in seconds.
+        chunk_duration: Duration of this audio chunk in seconds.
 
     Returns:
         BatchRecognizeResponse with inline results.
@@ -186,7 +193,6 @@ def transcribe_single_file(
     Raises:
         ProcessingError: On API errors or timeouts.
     """
-    effective_max_timeout = timeout if timeout is not None else max_timeout
     responses = transcribe_files(
         gcs_uris=[gcs_uri],
         lang=lang,
@@ -195,7 +201,10 @@ def transcribe_single_file(
         project_id=project_id,
         region=region,
         model=model,
-        max_timeout=effective_max_timeout,
+        timeout=timeout,
+        max_timeout=max_timeout,
+        total_audio_seconds=total_audio_seconds,
+        chunk_duration=chunk_duration,
     )
     return responses[0]
 
@@ -210,12 +219,15 @@ def transcribe_files(
     model: str,
     timeout: int | None = None,
     max_timeout: int = TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
-    poll_interval: int = 15,
-    batch_size: int = TRANSCRIPTION_BATCH_SIZE,
+    poll_interval: float | None = None,
+    concurrency: int = TRANSCRIPTION_CONCURRENCY,
+    batch_size: int | None = None,
+    total_audio_seconds: float | None = None,
+    chunk_duration: float | None = None,
 ) -> list[cloud_speech.BatchRecognizeResponse]:
     """
-    Transcribe multiple files by submitting BatchRecognize requests in bounded batches
-    and monitoring them with retry on transient 429 ResourceExhausted errors.
+    Transcribe multiple files by submitting BatchRecognize requests in bounded concurrency waves
+    and monitoring them with adaptive polling and retry on transient 429 ResourceExhausted errors.
 
     Args:
         gcs_uris: List of GCS URIs to transcribe.
@@ -226,9 +238,12 @@ def transcribe_files(
         region: GCP region.
         model: Recognition model name.
         timeout: Legacy parameter for backward compatibility (maps to max_timeout if set).
-        max_timeout: Maximum overall time cap in seconds across all batches.
-        poll_interval: Seconds between progress monitoring checks.
-        batch_size: Maximum number of concurrent transcription requests per batch.
+        max_timeout: Base maximum overall time cap in seconds across all batches.
+        poll_interval: Optional override for seconds between progress checks.
+        concurrency: Maximum number of concurrent transcription requests per wave.
+        batch_size: Backward-compatible alias for concurrency.
+        total_audio_seconds: Total audio duration across all chunks in seconds.
+        chunk_duration: Representative single chunk duration in seconds.
 
     Returns:
         List of BatchRecognizeResponse objects (one per file, in original order).
@@ -239,8 +254,32 @@ def transcribe_files(
     if not gcs_uris:
         return []
 
-    effective_max_timeout = timeout if timeout is not None else max_timeout
-    effective_batch_size = max(1, batch_size)
+    effective_concurrency = max(1, batch_size if batch_size is not None else concurrency)
+
+    if timeout is not None:
+        effective_max_timeout = timeout
+    elif total_audio_seconds is not None and total_audio_seconds > 0:
+        effective_max_timeout = max(
+            max_timeout,
+            math.ceil(total_audio_seconds / 3600.0) * 1800,
+        )
+    else:
+        effective_max_timeout = max_timeout
+
+    # Adaptive polling calculation
+    if chunk_duration is not None:
+        effective_chunk_dur = chunk_duration
+    elif total_audio_seconds is not None and len(gcs_uris) > 0:
+        effective_chunk_dur = total_audio_seconds / len(gcs_uris)
+    else:
+        effective_chunk_dur = 900.0
+
+    expected_chunk_time = CHUNK_OVERHEAD_SECONDS + (effective_chunk_dur / CHUNK_REALTIME_FACTOR)
+    pre_delay = 0.6 * expected_chunk_time
+    if poll_interval is not None:
+        effective_poll_interval = float(poll_interval)
+    else:
+        effective_poll_interval = max(5.0, 0.15 * expected_chunk_time)
 
     client = _get_speech_client(region)
     config = _build_recognition_config(lang, model, enable_diarization, speaker_count)
@@ -250,24 +289,24 @@ def transcribe_files(
     speaker_str = str(speaker_count) if speaker_count else "auto-detect"
 
     total_files = len(gcs_uris)
-    num_batches = (total_files + effective_batch_size - 1) // effective_batch_size
+    num_batches = (total_files + effective_concurrency - 1) // effective_concurrency
     logger.info(
-        "Submitting %d transcription request(s) across %d batch(es) (batch size: %d)...",
-        total_files, num_batches, effective_batch_size,
+        "Submitting %d transcription request(s) across %d wave(s) (concurrency: %d)...",
+        total_files, num_batches, effective_concurrency,
     )
     logger.info(
-        "Config: model=%s, lang=%s, diarization=%s, speakers=%s",
-        model, lang, diarization_str, speaker_str,
+        "Config: model=%s, lang=%s, diarization=%s, speakers=%s, timeout=%ds, poll_interval=%.1fs",
+        model, lang, diarization_str, speaker_str, effective_max_timeout, effective_poll_interval,
     )
 
     all_responses: list[cloud_speech.BatchRecognizeResponse] = []
     chunk_statuses: dict[int, str] = {i: "pending" for i in range(1, total_files + 1)}
     start_time = time.time()
 
-    for batch_num, batch_start in enumerate(range(0, total_files, effective_batch_size), start=1):
-        batch_uris = gcs_uris[batch_start:batch_start + effective_batch_size]
+    for batch_num, batch_start in enumerate(range(0, total_files, effective_concurrency), start=1):
+        batch_uris = gcs_uris[batch_start:batch_start + effective_concurrency]
         logger.info(
-            "--- Starting Batch %d/%d (files %d-%d of %d) ---",
+            "--- Starting Wave %d/%d (files %d-%d of %d) ---",
             batch_num, num_batches, batch_start + 1, batch_start + len(batch_uris), total_files,
         )
 
@@ -294,7 +333,7 @@ def transcribe_files(
                     "completed_response": None,
                 })
                 # Small pause between submissions to prevent burst rate-limit rejection
-                if offset < len(batch_uris) - 1 and poll_interval > 0:
+                if offset < len(batch_uris) - 1 and effective_poll_interval > 0:
                     time.sleep(1)
         except gcp_exceptions.InvalidArgument as e:
             raise ProcessingError(
@@ -314,13 +353,13 @@ def transcribe_files(
             ) from e
 
         logger.info(
-            "Monitoring %d operation(s) in Batch %d (overall timeout cap: %ds)...",
-            len(pending_items), batch_num, effective_max_timeout,
+            "Monitoring %d operation(s) in Wave %d (overall timeout cap: %ds, pre-delay: %.1fs)...",
+            len(pending_items), batch_num, effective_max_timeout, pre_delay,
         )
 
         # Initial wait before first polling check to allow backend workers to initialize
-        if poll_interval > 0:
-            time.sleep(min(15, poll_interval))
+        if effective_poll_interval > 0 and pre_delay > 0:
+            time.sleep(pre_delay)
 
         while True:
             total_elapsed = time.time() - start_time
@@ -338,7 +377,7 @@ def transcribe_files(
                 op = item["operation"]
 
                 # Pacing between individual status checks to prevent burst query rates
-                if poll_interval > 0:
+                if effective_poll_interval > 0:
                     time.sleep(0.2)
 
                 try:
@@ -348,8 +387,8 @@ def transcribe_files(
                         continue
                 except gcp_exceptions.ResourceExhausted:
                     logger.debug(
-                        "Chunk %d: transient 429 ResourceExhausted on status poll, will retry in %ds.",
-                        item["chunk_index"], poll_interval,
+                        "Chunk %d: transient 429 ResourceExhausted on status poll, will retry in %.1fs.",
+                        item["chunk_index"], effective_poll_interval,
                     )
                 except Exception as e:
                     chunk_statuses[item["chunk_index"]] = "error"
@@ -372,19 +411,19 @@ def transcribe_files(
             )
 
             logger.info(
-                "Batch %d/%d: %d/%d chunks completed (Total progress: %d/%d - %d%%)\n%s",
+                "Wave %d/%d: %d/%d chunks completed (Total progress: %d/%d - %d%%)\n%s",
                 batch_num, num_batches, batch_completed, len(batch_uris), total_completed, total_files, pct, matrix_str,
             )
 
             if all_done:
                 break
 
-            time.sleep(poll_interval)
+            time.sleep(effective_poll_interval)
 
         for item in pending_items:
             all_responses.append(item["completed_response"])
 
-        if batch_num < num_batches and poll_interval > 0:
+        if batch_num < num_batches and effective_poll_interval > 0:
             time.sleep(2)
 
     total_time = int(time.time() - start_time)

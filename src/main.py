@@ -5,8 +5,12 @@ import sys
 from datetime import datetime
 
 from src.config import (
-    CHUNK_LENGTH_SECONDS_DUTCH,
-    CHUNK_LENGTH_SECONDS_ENGLISH,
+    CHUNK_MAX_LENGTH_SECONDS_DUTCH,
+    CHUNK_MAX_LENGTH_SECONDS_ENGLISH,
+    CHUNK_MIN_LENGTH_SECONDS,
+    CHUNK_SILENCE_MIN_DURATION_SECONDS,
+    CHUNK_SILENCE_NOISE_THRESHOLD_DB,
+    CHUNK_SILENCE_SEARCH_WINDOW_SECONDS,
     GCP_PROJECT_ID,
     GCP_REGION,
     GCS_BUCKET_NAME,
@@ -16,17 +20,23 @@ from src.config import (
     LANGUAGE_CODES_ENGLISH,
     OUTPUT_DIR,
     TRANSCRIPT_OUTPUT_DIR,
+    TRANSCRIPTION_CONCURRENCY,
     TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
     TRANSCRIPTION_MODEL,
-    TRANSCRIPTION_TIMEOUT_SECONDS,
     validate_extension,
     validate_gcp_config,
 )
-from src.audio import ProcessingError, extract_audio_to_flac, split_flac, get_audio_duration
+from src.audio import (
+    ProcessingError,
+    compute_chunk_boundaries,
+    detect_silences,
+    extract_audio_to_flac,
+    get_audio_duration,
+    split_flac,
+)
 from src.gcs import delete_gcs_prefix, upload_files_to_gcs, upload_to_gcs
 from src.transcribe import transcribe_files, transcribe_single_file
 from src.transcript_output import (
-    format_plain_transcript,
     save_transcript,
     stitch_diarized_transcripts,
     stitch_plain_transcripts,
@@ -84,11 +94,12 @@ def process_file(input_path: str, lang: str, prepare_only: bool = False) -> None
     Pipeline steps:
         1. Validate input
         2. Extract audio to FLAC
-        3. Split into chunks if needed (English only)
-        4. [If not prepare_only] Upload to GCS
-        5. [If not prepare_only] Transcribe via Speech-to-Text V2
-        6. [If not prepare_only] Process and save transcript
-        7. Clean up temporary files
+        3. Detect silences and compute adaptive chunk boundaries
+        4. Split into chunks if N > 1
+        5. [If not prepare_only] Upload to GCS
+        6. [If not prepare_only] Transcribe via Speech-to-Text V2
+        7. [If not prepare_only] Process and save transcript
+        8. Clean up temporary files
 
     Args:
         input_path: Path to the source media file.
@@ -128,24 +139,37 @@ def process_file(input_path: str, lang: str, prepare_only: bool = False) -> None
 
 def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: bool) -> None:
     """
-    Route 1: Dutch — monolithic FLAC unless > CHUNK_LENGTH_SECONDS_DUTCH, no diarization.
-
-    Full pipeline: extract -> upload -> transcribe (no diarization) -> save transcript.
+    Route 1: Dutch — adaptive one-wave parallel chunking, no diarization.
     """
     final_output = os.path.join(OUTPUT_DIR, f"{base_name}_{lang}.flac")
-    logger.info("Processing route for Dutch (%s).", lang)
+    logger.info("Processing route for Dutch (%s): Adaptive parallel wave.", lang)
 
     extract_audio_to_flac(input_path, final_output)
-
     duration = get_audio_duration(final_output)
-    is_chunked = duration > CHUNK_LENGTH_SECONDS_DUTCH
+
+    silences = detect_silences(
+        final_output,
+        noise_threshold=CHUNK_SILENCE_NOISE_THRESHOLD_DB,
+        min_duration=CHUNK_SILENCE_MIN_DURATION_SECONDS,
+    )
+    boundaries = compute_chunk_boundaries(
+        duration=duration,
+        max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_DUTCH,
+        silences=silences,
+        window=CHUNK_SILENCE_SEARCH_WINDOW_SECONDS,
+        min_chunk_length=CHUNK_MIN_LENGTH_SECONDS,
+        target_parallelism=TRANSCRIPTION_CONCURRENCY,
+    )
+
+    is_chunked = len(boundaries) > 0
+    chunk_paths: list[str] = []
 
     if is_chunked:
         logger.info(
-            "Audio duration (%.2fs) exceeds Dutch chunk threshold (%ds). Switching to chunked mode.",
-            duration, CHUNK_LENGTH_SECONDS_DUTCH,
+            "Audio duration (%.2fs) divided into %d chunks with adaptive pause snapping.",
+            duration, len(boundaries) + 1,
         )
-        chunk_paths = split_flac(final_output, OUTPUT_DIR, base_name, CHUNK_LENGTH_SECONDS_DUTCH)
+        chunk_paths = split_flac(final_output, OUTPUT_DIR, base_name, boundaries)
 
         if prepare_only:
             logger.info("-------------------------------------------------------------------")
@@ -164,8 +188,8 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
             return
     else:
         logger.info(
-            "Audio duration (%.2fs) is within Dutch chunk threshold (%ds). Proceeding with monolithic file.",
-            duration, CHUNK_LENGTH_SECONDS_DUTCH,
+            "Audio duration (%.2fs) within monolithic limit (%ds). Proceeding with monolithic file.",
+            duration, CHUNK_MAX_LENGTH_SECONDS_DUTCH,
         )
         if prepare_only:
             logger.info("-------------------------------------------------------------------")
@@ -197,12 +221,15 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
                 region=GCP_REGION,
                 model=TRANSCRIPTION_MODEL,
                 max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+                concurrency=TRANSCRIPTION_CONCURRENCY,
+                total_audio_seconds=duration,
+                chunk_duration=duration / len(chunk_paths),
             )
 
             # Stitch and save transcript
             logger.info("Transcription complete. Processing results...")
             transcript_text = stitch_plain_transcripts(responses)
-            txt_path, json_path = save_transcript(
+            save_transcript(
                 transcript_text=transcript_text,
                 raw_responses=responses,
                 output_dir=TRANSCRIPT_OUTPUT_DIR,
@@ -227,12 +254,14 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
                 region=GCP_REGION,
                 model=TRANSCRIPTION_MODEL,
                 max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+                total_audio_seconds=duration,
+                chunk_duration=duration,
             )
 
             # Process and save transcript
             logger.info("Transcription complete. Processing results...")
             transcript_text = stitch_plain_transcripts([response])
-            txt_path, json_path = save_transcript(
+            save_transcript(
                 transcript_text=transcript_text,
                 raw_responses=[response],
                 output_dir=TRANSCRIPT_OUTPUT_DIR,
@@ -260,20 +289,37 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
 
 def _process_english(input_path: str, base_name: str, lang: str, prepare_only: bool) -> None:
     """
-    Route 2: English — chunked FLACs, diarization enabled.
-
-    Full pipeline: extract -> chunk -> prompt speakers -> upload -> transcribe -> stitch -> save.
+    Route 2: English — ceiling-driven chunking to minimise boundaries, diarization enabled.
     """
-    temp_flac = os.path.join(OUTPUT_DIR, f".{base_name}_temp.flac")
-    logger.info("Processing route for English (%s): Chunked files with diarization.", lang)
+    final_output = os.path.join(OUTPUT_DIR, f"{base_name}_{lang}.flac")
+    logger.info("Processing route for English (%s): Ceiling-driven chunking with diarization.", lang)
 
-    try:
-        # 1. Extract to temporary monolithic FLAC
-        extract_audio_to_flac(input_path, temp_flac)
+    extract_audio_to_flac(input_path, final_output)
+    duration = get_audio_duration(final_output)
 
-        # 2. Split into chunks
-        chunk_paths = split_flac(temp_flac, OUTPUT_DIR, base_name, CHUNK_LENGTH_SECONDS_ENGLISH)
-        logger.info("Splitting into 15-minute chunks (%d chunks created).", len(chunk_paths))
+    silences = detect_silences(
+        final_output,
+        noise_threshold=CHUNK_SILENCE_NOISE_THRESHOLD_DB,
+        min_duration=CHUNK_SILENCE_MIN_DURATION_SECONDS,
+    )
+    boundaries = compute_chunk_boundaries(
+        duration=duration,
+        max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_ENGLISH,
+        silences=silences,
+        window=CHUNK_SILENCE_SEARCH_WINDOW_SECONDS,
+        min_chunk_length=CHUNK_MIN_LENGTH_SECONDS,
+        target_parallelism=None,
+    )
+
+    is_chunked = len(boundaries) > 0
+    chunk_paths: list[str] = []
+
+    if is_chunked:
+        logger.info(
+            "Audio duration (%.2fs) divided into %d chunks (ceiling: %ds).",
+            duration, len(boundaries) + 1, CHUNK_MAX_LENGTH_SECONDS_ENGLISH,
+        )
+        chunk_paths = split_flac(final_output, OUTPUT_DIR, base_name, boundaries)
 
         if prepare_only:
             logger.info("-------------------------------------------------------------------")
@@ -287,20 +333,34 @@ def _process_english(input_path: str, base_name: str, lang: str, prepare_only: b
                 "until the full pipeline is used (without --prepare-only)."
             )
             logger.info("-------------------------------------------------------------------")
+            if os.path.exists(final_output):
+                os.remove(final_output)
+            return
+    else:
+        logger.info(
+            "Audio duration (%.2fs) within monolithic limit (%ds). Proceeding with monolithic file.",
+            duration, CHUNK_MAX_LENGTH_SECONDS_ENGLISH,
+        )
+        if prepare_only:
+            logger.info("-------------------------------------------------------------------")
+            logger.info("READY FOR GCP: %s", final_output)
+            logger.info("Upload this file to GCP. ENABLE Speaker Diarization.")
+            logger.info("-------------------------------------------------------------------")
             return
 
-        # 3. Interactive speaker count prompt (after audio prep, before upload)
-        speaker_count = _prompt_speaker_count()
+    # Interactive speaker count prompt (after audio prep, before upload)
+    speaker_count = _prompt_speaker_count()
 
-        # --- Full pipeline: upload, transcribe, stitch, save, cleanup ---
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        gcs_prefix = f"{base_name}_{timestamp}"
+    # --- Full pipeline: upload, transcribe, stitch, save, cleanup ---
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    gcs_prefix = f"{base_name}_{timestamp}"
 
-        try:
-            # 4. Upload chunks to GCS
+    try:
+        if is_chunked:
+            # Upload chunks to GCS
             gcs_uris = upload_files_to_gcs(chunk_paths, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT_SECONDS)
 
-            # 5. Transcribe all chunks
+            # Transcribe all chunks
             speaker_str = str(speaker_count) if speaker_count else "auto-detect"
             logger.info(
                 "Starting transcription (model: %s, lang: %s, diarization: enabled, speakers: %s)...",
@@ -315,34 +375,71 @@ def _process_english(input_path: str, base_name: str, lang: str, prepare_only: b
                 region=GCP_REGION,
                 model=TRANSCRIPTION_MODEL,
                 max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+                concurrency=TRANSCRIPTION_CONCURRENCY,
+                total_audio_seconds=duration,
+                chunk_duration=duration / len(chunk_paths),
             )
 
-            # 6. Stitch and save transcript
+            # Stitch and save transcript
             logger.info("Transcription complete. Processing results...")
             transcript_text = stitch_diarized_transcripts(responses)
-            txt_path, json_path = save_transcript(
+            save_transcript(
                 transcript_text=transcript_text,
                 raw_responses=responses,
                 output_dir=TRANSCRIPT_OUTPUT_DIR,
                 base_name=base_name,
                 lang=lang,
             )
+        else:
+            # Upload monolithic FLAC to GCS
+            gcs_uri = upload_to_gcs(final_output, GCS_BUCKET_NAME, gcs_prefix, timeout=GCS_UPLOAD_TIMEOUT_SECONDS)
 
-        finally:
-            # Cleanup: GCS objects
-            logger.info("Cleaning up temporary files...")
-            delete_gcs_prefix(GCS_BUCKET_NAME, gcs_prefix)
-            # Cleanup: local chunk files
+            # Transcribe single monolithic file
+            speaker_str = str(speaker_count) if speaker_count else "auto-detect"
+            logger.info(
+                "Starting transcription (model: %s, lang: %s, diarization: enabled, speakers: %s, monolithic)...",
+                TRANSCRIPTION_MODEL, lang, speaker_str,
+            )
+            response = transcribe_single_file(
+                gcs_uri=gcs_uri,
+                lang=lang,
+                enable_diarization=True,
+                speaker_count=speaker_count,
+                project_id=GCP_PROJECT_ID,
+                region=GCP_REGION,
+                model=TRANSCRIPTION_MODEL,
+                max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+                total_audio_seconds=duration,
+                chunk_duration=duration,
+            )
+
+            # Process and save transcript
+            logger.info("Transcription complete. Processing results...")
+            transcript_text = stitch_diarized_transcripts([response])
+            save_transcript(
+                transcript_text=transcript_text,
+                raw_responses=[response],
+                output_dir=TRANSCRIPT_OUTPUT_DIR,
+                base_name=base_name,
+                lang=lang,
+            )
+
+    finally:
+        # Cleanup: GCS objects
+        logger.info("Cleaning up temporary files...")
+        delete_gcs_prefix(GCS_BUCKET_NAME, gcs_prefix)
+
+        # Cleanup: local chunk files
+        if is_chunked:
             for chunk_path in chunk_paths:
                 if os.path.exists(chunk_path):
                     os.remove(chunk_path)
             logger.info("Removed %d local chunk file(s).", len(chunk_paths))
 
-    finally:
-        # Always clean up temp monolithic FLAC
-        if os.path.exists(temp_flac):
-            os.remove(temp_flac)
-            logger.info("Cleaned up temporary file: %s", temp_flac)
+        # Cleanup local monolithic FLAC
+        if os.path.exists(final_output):
+            os.remove(final_output)
+            logger.info("Removed local FLAC: %s", final_output)
 
 
 def main() -> None:
