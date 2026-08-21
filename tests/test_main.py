@@ -119,6 +119,39 @@ class TestCLIArgumentParsing:
                     main()
                     mock_pf.assert_called_once_with("input.mp4", "nl-nl", prepare_only=False)
 
+    def test_from_gcs_option_accepted(self):
+        """--from-gcs option triggers transcribe_from_gcs."""
+        test_args = ["prog", "--from-gcs", "sample-meeting_prefix", "--lang", "nl-nl"]
+        with patch.object(sys, "argv", test_args):
+            with patch("src.main.transcribe_from_gcs") as mock_tfgcs:
+                with patch("src.main.setup_logging"):
+                    from src.main import main
+                    mock_tfgcs.return_value = ("txt_path", "json_path")
+                    main()
+                    mock_tfgcs.assert_called_once_with(
+                        target="sample-meeting_prefix",
+                        lang="nl-nl",
+                        speaker_count=None,
+                    )
+
+    def test_missing_both_input_file_and_from_gcs_errors(self):
+        """Providing neither input_file nor --from-gcs raises SystemExit."""
+        test_args = ["prog", "--lang", "nl-nl"]
+        with patch.object(sys, "argv", test_args):
+            with patch("src.main.setup_logging"):
+                from src.main import main
+                with pytest.raises(SystemExit):
+                    main()
+
+    def test_providing_both_input_file_and_from_gcs_errors(self):
+        """Providing both input_file and --from-gcs raises SystemExit."""
+        test_args = ["prog", "input.mp4", "--from-gcs", "prefix", "--lang", "nl-nl"]
+        with patch.object(sys, "argv", test_args):
+            with patch("src.main.setup_logging"):
+                from src.main import main
+                with pytest.raises(SystemExit):
+                    main()
+
 
 class TestProcessFileDutchRoute:
     """Tests for process_file routing through Dutch route (monolithic vs chunked)."""

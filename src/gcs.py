@@ -104,6 +104,52 @@ def upload_files_to_gcs(
     return uris
 
 
+def list_gcs_uris_under_prefix(bucket_name: str, gcs_prefix: str) -> list[str]:
+    """
+    List all audio object URIs under a given GCS prefix, sorted alphanumerically.
+
+    Args:
+        bucket_name: GCS bucket name.
+        gcs_prefix: Prefix (folder) to search in bucket.
+
+    Returns:
+        List of gs:// URIs for matching audio objects, sorted in natural order.
+
+    Raises:
+        ProcessingError: If no audio blobs are found or on GCS failure.
+    """
+    client = _get_client()
+    clean_prefix = gcs_prefix.strip("/")
+    try:
+        bucket = client.bucket(bucket_name)
+        blobs = list(bucket.list_blobs(prefix=clean_prefix))
+    except Exception as e:
+        raise ProcessingError(
+            f"Failed to list GCS objects in bucket '{bucket_name}' under prefix '{clean_prefix}'.\n"
+            f"Original error: {e}"
+        ) from e
+
+    from src.config import SUPPORTED_EXTENSIONS
+    valid_exts = tuple(SUPPORTED_EXTENSIONS) + (".flac",)
+
+    audio_blobs = [
+        b for b in blobs
+        if any(b.name.lower().endswith(ext) for ext in valid_exts)
+    ]
+
+    if not audio_blobs:
+        raise ProcessingError(
+            f"No audio files found in gs://{bucket_name}/{clean_prefix}/. "
+            f"Expected extensions: {', '.join(valid_exts)}"
+        )
+
+    # Sort blobs alphanumerically so chunks are ordered: chunk_000, chunk_001, etc.
+    audio_blobs.sort(key=lambda b: b.name)
+    uris = [f"gs://{bucket_name}/{b.name}" for b in audio_blobs]
+    logger.info("Found %d audio file(s) under gs://%s/%s/", len(uris), bucket_name, clean_prefix)
+    return uris
+
+
 def delete_gcs_prefix(bucket_name: str, gcs_prefix: str) -> None:
     """
     Delete all objects under a GCS prefix (cleanup after transcription).

@@ -31,6 +31,7 @@ from src.transcript_output import (
     stitch_diarized_transcripts,
     stitch_plain_transcripts,
 )
+from src.transcribe_gcs import transcribe_from_gcs
 from src.logger import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -352,6 +353,8 @@ def main() -> None:
     )
     parser.add_argument(
         "input_file",
+        nargs="?",
+        default=None,
         help="Path to the input media file (e.g., input/meeting.mp4)",
     )
     parser.add_argument(
@@ -368,13 +371,43 @@ def main() -> None:
         help="Stop after generating FLAC files (v0.1 behavior). "
              "Files can then be manually uploaded to GCP Console.",
     )
+    parser.add_argument(
+        "--from-gcs",
+        metavar="GCS_TARGET",
+        default=None,
+        help="Transcribe audio files already uploaded to GCS (prefix or gs://bucket/prefix).",
+    )
+    parser.add_argument(
+        "--speakers",
+        type=int,
+        default=None,
+        help="Optional speaker count hint for English diarization when using --from-gcs.",
+    )
 
     args = parser.parse_args()
 
     logger.info("Starting Marketing Engineers Transcription Automator v0.2")
 
+    if not args.input_file and not args.from_gcs:
+        parser.error("Either input_file or --from-gcs must be specified.")
+
+    if args.input_file and args.from_gcs:
+        parser.error("Cannot specify both input_file and --from-gcs.")
+
     try:
-        process_file(args.input_file, args.lang, prepare_only=args.prepare_only)
+        if args.from_gcs:
+            speaker_count = args.speakers
+            if speaker_count is None and args.lang in LANGUAGE_CODES_ENGLISH:
+                speaker_count = _prompt_speaker_count()
+            txt_path, json_path = transcribe_from_gcs(
+                target=args.from_gcs,
+                lang=args.lang,
+                speaker_count=speaker_count,
+            )
+            logger.info("Transcript saved to: %s", txt_path)
+            logger.info("Raw API response saved to: %s", json_path)
+        else:
+            process_file(args.input_file, args.lang, prepare_only=args.prepare_only)
     except ProcessingError as e:
         logger.error("%s", e)
         sys.exit(1)
