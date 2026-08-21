@@ -3,45 +3,61 @@ venv/
 
 # Environment variables (may contain secrets)
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
 *.egg-info/
 .pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
 
-# Output artifacts (generated files, not source)
-output/*
-!output/.gitkeep
-
-# Transcripts (generated output)
-transcripts/*
-!transcripts/.gitkeep
-
-# Generated audio files
-*.flac
-
-# Service account keys (never commit credentials)
+# Service account keys & credentials (never commit credentials)
 service-account*.json
 credentials*.json
+*.pem
+*.key
+
+# Data directories (deny by default, retain .gitkeep)
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+transcripts/*
+!transcripts/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Global media and artifact catch-alls
+*.m4a
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.flac
+*.aac
+*.ogg
+*.webm
+*_raw.json
+*_transcript.txt
+*.log
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Logs
-/logs/
-
-# IDE
+# IDE & editors
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Input audio files (ignore media, keep folder)
-input/*
-!input/.gitkeep
-
-# AI Agent Workspaces
+# AI Agent Workspaces & Local config
 .kilo/
 .cursor/
 .cline/

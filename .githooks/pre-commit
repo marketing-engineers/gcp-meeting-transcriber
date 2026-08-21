@@ -1,0 +1,96 @@
+#!/bin/sh
+# Pre-commit guard to prevent accidental commits of media, transcripts, logs, or secrets.
+set -eu
+
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+ERRORS=0
+MAX_BYTES=$((5 * 1024 * 1024)) # 5 MB
+
+# Check staged files against path, name, size, and content rules
+git diff --cached --name-only -z | while IFS= read -r -d '' file; do
+    [ -z "$file" ] && continue
+
+    # Rule 1: Files inside input/, output/, transcripts/, logs/ that are not .gitkeep
+    case "$file" in
+        input/*|output/*|transcripts/*|logs/*)
+            case "$file" in
+                */.gitkeep) ;;
+                *)
+                    printf "${RED}[ERROR] Disallowed path staged: %s${NC}\n" "$file"
+                    printf "       Data directories (input, output, transcripts, logs) must not contain tracked artifacts.\n"
+                    printf "       Remediation: git restore --staged \"%s\"\n" "$file"
+                    exit 1
+                    ;;
+            esac
+            ;;
+    esac
+
+    # Rule 2: Media and transcript artifact extensions anywhere in the repo
+    case "$file" in
+        *.m4a|*.mp4|*.mov|*.mkv|*.wav|*.flac|*.aac|*.ogg|*.webm|*_raw.json|*_transcript.txt|*.log)
+            printf "${RED}[ERROR] Disallowed file type staged: %s${NC}\n" "$file"
+            printf "       Media, raw JSON outputs, transcripts, and log files must never be committed.\n"
+            printf "       Remediation: git restore --staged \"%s\"\n" "$file"
+            exit 1
+            ;;
+    esac
+
+    # Rule 3: Credentials or environment files
+    case "$file" in
+        .env|.env.*)
+            case "$file" in
+                .env.example) ;;
+                *)
+                    printf "${RED}[ERROR] Environment file staged: %s${NC}\n" "$file"
+                    printf "       Never commit real environment files.\n"
+                    printf "       Remediation: git restore --staged \"%s\"\n" "$file"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        service-account*.json|credentials*.json|*.pem|*.key)
+            printf "${RED}[ERROR] Potential credential file staged: %s${NC}\n" "$file"
+            printf "       Never commit service account keys or private keys.\n"
+            printf "       Remediation: git restore --staged \"%s\"\n" "$file"
+            exit 1
+            ;;
+    esac
+done || exit 1
+
+# Rule 4 & 5: Check staged blob size and secret patterns
+# git diff --cached --raw gives: :<old-mode> <new-mode> <old-oid> <new-oid> <status>\t<file>
+git diff --cached --raw -z | while IFS= read -r -d '' meta; do
+    [ -z "$meta" ] && continue
+    IFS= read -r -d '' file || break
+
+    new_mode=$(echo "$meta" | awk '{print $2}')
+    new_oid=$(echo "$meta" | awk '{print $4}')
+    status=$(echo "$meta" | awk '{print $5}')
+
+    # Skip deletions
+    if [ "$status" = "D" ] || [ "$new_oid" = "0000000000000000000000000000000000000000" ]; then
+        continue
+    fi
+
+    # Check blob size
+    size=$(git cat-file -s "$new_oid" 2>/dev/null || echo 0)
+    if [ "$size" -gt "$MAX_BYTES" ]; then
+        printf "${RED}[ERROR] Large blob staged (%s bytes > %s bytes): %s${NC}\n" "$size" "$MAX_BYTES" "$file"
+        printf "       Files larger than 5 MB must not be committed to this repository.\n"
+        printf "       Remediation: git restore --staged \"%s\"\n" "$file"
+        exit 1
+    fi
+
+    # Check for secret patterns in staged content
+    if git cat-file -p "$new_oid" | grep -q -E 'AIza[0-9A-Za-z_-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"type":\s*"service_account"|gh[pousr]_[A-Za-z0-9]{20,}'; then
+        printf "${RED}[ERROR] Potential secret detected in staged content: %s${NC}\n" "$file"
+        printf "       Found pattern matching API keys, private keys, service account credentials, or GitHub tokens.\n"
+        printf "       Remediation: git restore --staged \"%s\"\n" "$file"
+        exit 1
+    fi
+done || exit 1
+
+exit 0
