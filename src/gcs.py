@@ -2,6 +2,8 @@
 
 import logging
 import os
+import time
+from typing import Any
 
 from google.cloud import storage
 from google.api_core import exceptions as gcp_exceptions
@@ -30,15 +32,81 @@ def _get_client() -> storage.Client:
         ) from e
 
 
-def upload_to_gcs(local_path: str, bucket_name: str, gcs_prefix: str, timeout: int = 600) -> str:
+class ProgressFileReader:
+    """File-like wrapper that reports upload progress periodically."""
+
+    def __init__(
+        self,
+        file_path: str,
+        callback: Any = None,
+        min_interval_seconds: float = 5.0,
+    ) -> None:
+        self.file_path = file_path
+        self._file = open(file_path, "rb")
+        self.total_bytes = os.path.getsize(file_path)
+        self.bytes_read = 0
+        self.callback = callback
+        self.min_interval_seconds = min_interval_seconds
+        self.start_time = time.time()
+        self.last_report_time = self.start_time
+        self.last_report_bytes = 0
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._file.read(size)
+        if data:
+            self.bytes_read += len(data)
+            now = time.time()
+            elapsed_since_last = now - self.last_report_time
+            if self.callback and elapsed_since_last >= self.min_interval_seconds:
+                pct = (self.bytes_read / self.total_bytes) * 100 if self.total_bytes > 0 else 100.0
+                speed_mb = (
+                    ((self.bytes_read - self.last_report_bytes) / elapsed_since_last) / (1024 * 1024)
+                    if elapsed_since_last > 0
+                    else 0.0
+                )
+                self.callback(self.bytes_read, self.total_bytes, pct, speed_mb)
+                self.last_report_time = now
+                self.last_report_bytes = self.bytes_read
+        return data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        res = self._file.seek(offset, whence)
+        self.bytes_read = self._file.tell()
+        return res
+
+    def tell(self) -> int:
+        return self._file.tell()
+
+    def close(self) -> None:
+        self._file.close()
+
+    def __enter__(self) -> "ProgressFileReader":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
+
+def upload_to_gcs(
+    local_path: str,
+    bucket_name: str,
+    gcs_prefix: str,
+    timeout: int = 600,
+    file_index: int | None = None,
+    total_files: int | None = None,
+    progress_interval_seconds: float = 5.0,
+) -> str:
     """
-    Upload a local file to GCS.
+    Upload a local file to GCS with intermittent progress logging.
 
     Args:
         local_path: Path to the local file.
         bucket_name: GCS bucket name.
         gcs_prefix: Prefix (folder) in the bucket.
         timeout: Timeout in seconds for the upload operation.
+        file_index: Optional 1-based index when uploading as part of a batch.
+        total_files: Optional total count of files in the batch.
+        progress_interval_seconds: Progress reporting throttle interval (default 5.0s).
 
     Returns:
         The gs:// URI of the uploaded object.
@@ -49,11 +117,38 @@ def upload_to_gcs(local_path: str, bucket_name: str, gcs_prefix: str, timeout: i
     client = _get_client()
     filename = os.path.basename(local_path)
     blob_name = f"{gcs_prefix}/{filename}"
+    file_size_bytes = os.path.getsize(local_path) if os.path.exists(local_path) else 0
+    total_mb = file_size_bytes / (1024 * 1024)
+
+    prefix_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
+
+    logger.info(
+        "Uploading %s%s (%.1f MB) -> gs://%s/%s...",
+        prefix_str, filename, total_mb, bucket_name, blob_name,
+    )
+
+    t0 = time.time()
+
+    def _progress_callback(bytes_read: int, total_bytes: int, pct: float, speed_mb: float) -> None:
+        mb_read = bytes_read / (1024 * 1024)
+        logger.info(
+            "Upload progress %s%s: %.1f/%.1f MB (%d%%) @ %.1f MB/s",
+            prefix_str, filename, mb_read, total_mb, int(pct), speed_mb,
+            extra={"in_place": True},
+        )
 
     try:
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_name)
-        blob.upload_from_filename(local_path, timeout=timeout)
+        # Set chunk size to 2MB (multiple of 256KB) so resumable upload streams in chunks,
+        # allowing fine-grained progress callbacks during upload.
+        blob.chunk_size = 2 * 1024 * 1024
+        with ProgressFileReader(
+            local_path,
+            callback=_progress_callback,
+            min_interval_seconds=progress_interval_seconds,
+        ) as reader:
+            blob.upload_from_file(reader, size=reader.total_bytes, timeout=timeout)
     except gcp_exceptions.NotFound as e:
         raise ProcessingError(
             f"GCS bucket '{bucket_name}' not found. "
@@ -70,8 +165,13 @@ def upload_to_gcs(local_path: str, bucket_name: str, gcs_prefix: str, timeout: i
             f"Failed to upload {local_path} to GCS.\nOriginal error: {e}"
         ) from e
 
+    upload_elapsed = time.time() - t0
+    avg_speed_mb = total_mb / upload_elapsed if upload_elapsed > 0 else 0.0
     gcs_uri = f"gs://{bucket_name}/{blob_name}"
-    logger.info("Uploaded: %s -> %s", local_path, gcs_uri)
+    logger.info(
+        "Uploaded %s%s: %.1f MB in %.1fs (avg %.1f MB/s) -> %s",
+        prefix_str, filename, total_mb, upload_elapsed, avg_speed_mb, gcs_uri,
+    )
     return gcs_uri
 
 
@@ -79,7 +179,7 @@ def upload_files_to_gcs(
     local_paths: list[str], bucket_name: str, gcs_prefix: str, timeout: int = 600
 ) -> list[str]:
     """
-    Upload multiple local files to GCS.
+    Upload multiple local files to GCS sequentially with progress updates.
 
     Args:
         local_paths: List of local file paths to upload.
@@ -93,13 +193,22 @@ def upload_files_to_gcs(
     Raises:
         ProcessingError: On upload failure.
     """
+    total_bytes = sum(os.path.getsize(p) for p in local_paths if os.path.exists(p))
+    total_mb = total_bytes / (1024 * 1024)
+    total_count = len(local_paths)
+
     logger.info(
-        "Uploading %d file(s) to gs://%s/%s/...",
-        len(local_paths), bucket_name, gcs_prefix,
+        "Starting upload of %d file(s) (total: %.1f MB) to gs://%s/%s/...",
+        total_count, total_mb, bucket_name, gcs_prefix,
     )
     uris: list[str] = []
-    for path in local_paths:
-        uri = upload_to_gcs(path, bucket_name, gcs_prefix, timeout=timeout)
+    for i, path in enumerate(local_paths, start=1):
+        uri = upload_to_gcs(
+            path, bucket_name, gcs_prefix,
+            timeout=timeout,
+            file_index=i,
+            total_files=total_count,
+        )
         uris.append(uri)
     return uris
 
