@@ -5,6 +5,13 @@ This project automates the extraction, processing, and transcription of meeting 
 ## Background
 There is a huge benefit to having a transcript of your meetings, but we don't like sharing recordings with third parties. Since we have been working with Google Cloud for years, we wanted to build a solution that is secure, private, and cost-effective.
 
+## Data Handling & Privacy
+
+- **Your Cloud, Your Data:** Audio is processed using your own Google Cloud project and uploaded temporarily to your private Google Cloud Storage (GCS) bucket.
+- **Automated Cleanup:** Audio chunks uploaded to GCS are automatically deleted in a `finally` execution block upon completion or failure.
+- **Bucket Hardening:** We recommend configuring your GCS bucket with Uniform Bucket-Level Access, Public Access Prevention, and a 7-day lifecycle deletion policy.
+- **Local Isolation:** Raw media (`input/`), intermediate audio (`output/`), generated transcripts (`transcripts/`), and local logs (`logs/`) are strictly gitignored with built-in pre-commit guardrails to prevent accidental commits of confidential data.
+
 ## Prerequisites
 
 - Python 3.10+
@@ -24,21 +31,32 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    pip install -r requirements.txt
    ```
 
-3. **Authenticate with Google Cloud:**
+3. **Install local pre-commit guardrails:**
+   ```bash
+   .githooks/install.sh
+   ```
+
+4. **Authenticate with Google Cloud:**
    ```bash
    gcloud auth application-default login
    ```
    *Note: Ensure the **Cloud Speech-to-Text API** is enabled in your GCP project. Quota project attribution is managed programmatically via the `.env` configuration file.*
 
-4. **Configure environment variables:**
+5. **Provision your private GCS Bucket:**
+   Create a secure bucket in your chosen region (e.g., `eu`):
+   ```bash
+   gcloud storage buckets create gs://<your-bucket-name> --location=eu --uniform-bucket-level-access --public-access-prevention
+   ```
+
+6. **Configure environment variables:**
    Copy the example file and adjust as needed:
    ```bash
    cp .env.example .env
    ```
-   *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID. The default bucket `your-transcriber-bucket` is pre-configured for temporary audio uploads with a 7-day retention policy and public access prevention.*
+   *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID and `GCS_BUCKET_NAME` with your bucket name.*
 
    Key environment variables:
-   - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted and monitored concurrently per wave. (Renamed from `TRANSCRIPTION_BATCH_SIZE`; a migration guard will alert you if the old key is present).
+   - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted and monitored concurrently per wave.
    - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` (Default: `2700` / 45 min): Maximum chunk duration ceiling for Dutch recordings.
    - `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Maximum chunk duration ceiling for English recordings.
    - `CHUNK_MIN_LENGTH_SECONDS` (Default: `600` / 10 min): Minimum chunk floor below which fixed GCP per-request overhead dominates.
@@ -66,7 +84,7 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    ```
    You can enter a number (e.g., `2`) or press Enter to let the Chirp 3 model auto-detect the speaker count.
 
-4. The pipeline will automatically upload the audio to the GCS bucket (`gs://your-transcriber-bucket`), run the transcription via BatchRecognize, download the results, and clean up the GCS bucket.
+4. The pipeline will automatically upload the audio to your GCS bucket (`gs://<your-bucket-name>`), run the transcription via BatchRecognize, download the results, and clean up the GCS bucket.
 
 5. **Output:** The final transcripts will be saved in the `transcripts/` directory as both a human-readable text file and a raw JSON API response.
    Transcripts are automatically post-processed at sentence boundaries (`.`, `?`, `!`) to guarantee clean, line-bounded plain text (capped by default at 120 characters per line) for optimal compatibility with CLI tools, git diffs, and LLM contexts.
@@ -125,7 +143,7 @@ flowchart TD
    - **Monolithic Route for Short Recordings:** Any recording ≤ 45 minutes bypasses chunking entirely and processes as a single monolithic FLAC.
 
 3. **Secure Cloud Streaming with Real-Time Feedback:**
-   - Audio is uploaded to a private GCS bucket (`gs://your-transcriber-bucket`) configured with 7-day retention and public access prevention.
+   - Audio is uploaded to your private GCS bucket configured with 7-day retention and public access prevention.
    - Uploads stream in 2 MB resumable chunks with live in-place terminal updates (like `wget`/`curl`) and clean, timestamped logs in `logs/app.log`.
 
 4. **Speech-to-Text V2 Batch Transcription:**
@@ -188,9 +206,14 @@ The behavior of the script changes based on the language requested, to accommoda
 ```
 .
 ├── .env.example          # Template for environment variables
+├── .githooks/            # Pre-commit security and confidentiality guard
 ├── .gitignore
+├── CONTRIBUTING.md       # Contribution guidelines and workflow
+├── LICENSE               # MIT License
 ├── pyproject.toml        # Project metadata and configuration
+├── README.md
 ├── requirements.txt      # Python dependencies
+├── SECURITY.md           # Security disclosure policy
 ├── input/                # (Optional) Drop raw media files here
 ├── output/               # Intermediate FLAC files appear here
 ├── transcripts/          # Final generated transcripts
@@ -223,3 +246,7 @@ The behavior of the script changes based on the language requested, to accommoda
 - **Automatic LLM Summarization Pipeline**: Summarize stitched transcripts natively via Gemini.
 - **Denoiser Toggle**: FFmpeg noise reduction for phone recordings.
 - **Model Adaptation**: Domain-specific vocabulary hints.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

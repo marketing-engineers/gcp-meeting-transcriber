@@ -44,7 +44,7 @@ per_chunk_time ≈ CHUNK_OVERHEAD_SECONDS + (chunk_duration / CHUNK_REALTIME_FAC
                ≈ 15s + (chunk_duration / 25)
 ```
 - Short chunks (<10 min) waste wall-clock time because the ~15s fixed overhead dominates.
-- Historical 5-minute Dutch chunking was an over-fit to a single transient regional incident on 2026-07-22.
+- Historical 5-minute Dutch chunking was an over-fit to early regional API limits.
 - The 20-minute BatchRecognize limit only applies when explicit word-level time offsets are enabled (`enable_word_time_offsets=True`). Diarization alone without word offsets operates seamlessly up to the API ceiling (tested and verified up to 45 minutes / 2700s).
 
 #### Route 1: Dutch (`nl-NL`)
