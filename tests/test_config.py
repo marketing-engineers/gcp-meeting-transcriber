@@ -100,3 +100,17 @@ def test_chunk_length_seconds_dutch_loaded():
     """Verify CHUNK_LENGTH_SECONDS_DUTCH is correctly loaded from src.config."""
     from src.config import CHUNK_LENGTH_SECONDS_DUTCH
     assert CHUNK_LENGTH_SECONDS_DUTCH in [300, 900]  # Depends on active .env file, but should be defined
+
+
+def test_line_formatting_config_defaults():
+    """Verify default values for line formatting configurations."""
+    from src.config import (
+        TRANSCRIPTION_MAX_CHARS_PER_LINE,
+        TRANSCRIPTION_MAX_SENTENCES_PER_LINE,
+        TRANSCRIPTION_CUSTOM_PROMPT,
+    )
+    assert isinstance(TRANSCRIPTION_MAX_CHARS_PER_LINE, int)
+    assert isinstance(TRANSCRIPTION_MAX_SENTENCES_PER_LINE, int)
+    # TRANSCRIPTION_CUSTOM_PROMPT can be None or str depending on .env
+    assert TRANSCRIPTION_CUSTOM_PROMPT is None or isinstance(TRANSCRIPTION_CUSTOM_PROMPT, str)
+

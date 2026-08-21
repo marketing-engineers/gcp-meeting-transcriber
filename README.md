@@ -37,10 +37,13 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    ```
    *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID. The default bucket `your-transcriber-bucket` is pre-configured for temporary audio uploads with a 7-day retention policy and public access prevention.*
 
-   Key environment variables:
-   - `GCS_UPLOAD_TIMEOUT` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads. If you have large files and slow upload speeds, increase this to prevent timeout errors.
-   - `TRANSCRIPTION_STALL_TIMEOUT` (Default: `300`): Inactivity timeout in seconds. If a chunk's progress percentage does not advance for 300 seconds, the job is aborted as stalled.
-   - `TRANSCRIPTION_MAX_TIMEOUT` (Default: `1800`): Overall maximum time cap in seconds (30 minutes) for a transcription batch running in parallel.
+    Key environment variables:
+    - `GCS_UPLOAD_TIMEOUT` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads. If you have large files and slow upload speeds, increase this to prevent timeout errors.
+    - `TRANSCRIPTION_STALL_TIMEOUT` (Default: `300`): Inactivity timeout in seconds. If a chunk's progress percentage does not advance for 300 seconds, the job is aborted as stalled.
+    - `TRANSCRIPTION_MAX_TIMEOUT` (Default: `1800`): Overall maximum time cap in seconds (30 minutes) for a transcription batch running in parallel.
+    - `TRANSCRIPTION_MAX_CHARS_PER_LINE` (Default: `120`): Target maximum line length for transcript post-processing.
+    - `TRANSCRIPTION_MAX_SENTENCES_PER_LINE` (Default: `3`): Target maximum sentences per line.
+    - `TRANSCRIPTION_CUSTOM_PROMPT` (Optional): Custom prompt instruction passed to Chirp 3 models via `CustomPromptConfig`.
 
 ## Usage
 
@@ -60,6 +63,7 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
 4. The pipeline will automatically upload the audio to the GCS bucket (`gs://your-transcriber-bucket`), run the transcription via BatchRecognize, download the results, and clean up the GCS bucket.
 
 5. **Output:** The final transcripts will be saved in the `transcripts/` directory as both a human-readable text file and a raw JSON API response.
+   Transcripts are automatically post-processed at sentence boundaries (`.`, `?`, `!`) to guarantee clean, line-bounded plain text (capped by default at 120 characters per line) for optimal compatibility with CLI tools, git diffs, and LLM contexts.
 
 ### Parallel Execution & Progress Tracking
 When chunking long recordings, all chunks are submitted concurrently to GCP BatchRecognize and monitored in parallel. Real-time progress percentages (`Progress: Chunk 1: 45% | Chunk 2: 20%`) are logged every 10 seconds. Inactivity stall detection prevents hanging indefinitely if an API request stalls.

@@ -49,8 +49,13 @@ LANGUAGE_CODES_DUTCH: list[str] = _get_csv_list("LANGUAGE_CODES_DUTCH", "nl-nl")
 LANGUAGE_CODES_ENGLISH: list[str] = _get_csv_list("LANGUAGE_CODES_ENGLISH", "en-us,en-gb")
 LANGUAGE_CODES_ALL: list[str] = LANGUAGE_CODES_DUTCH + LANGUAGE_CODES_ENGLISH
 
+# Directory Configuration
 OUTPUT_DIR: str = _get_str("OUTPUT_DIR", "output")
 TRANSCRIPT_OUTPUT_DIR: str = _get_str("TRANSCRIPT_OUTPUT_DIR", "transcripts")
+
+# Transcript Formatting Configuration
+TRANSCRIPTION_MAX_CHARS_PER_LINE: int = _get_int("TRANSCRIPTION_MAX_CHARS_PER_LINE", 120)
+TRANSCRIPTION_MAX_SENTENCES_PER_LINE: int = _get_int("TRANSCRIPTION_MAX_SENTENCES_PER_LINE", 3)
 
 # ---------------------------------------------------------------------------
 # GCP Configuration (required for transcription, optional for --prepare-only)
@@ -63,6 +68,7 @@ TRANSCRIPTION_MODEL: str = _get_str("TRANSCRIPTION_MODEL", "chirp_3")
 TRANSCRIPTION_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_TIMEOUT_SECONDS", 1800)
 TRANSCRIPTION_MAX_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_MAX_TIMEOUT_SECONDS", 1800)
 GCS_UPLOAD_TIMEOUT_SECONDS: int = _get_int("GCS_UPLOAD_TIMEOUT_SECONDS", 600)
+TRANSCRIPTION_CUSTOM_PROMPT: str | None = _get_optional_str("TRANSCRIPTION_CUSTOM_PROMPT")
 
 
 def validate_extension(file_path: str) -> bool:

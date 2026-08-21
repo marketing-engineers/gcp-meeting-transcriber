@@ -44,6 +44,7 @@ The pipeline routes logic strictly based on the requested language, respecting C
   - If audio duration exceeds `CHUNK_LENGTH_SECONDS_DUTCH` (default: 300s / 5 minutes), split into chunks.
   - Otherwise, generate a single, monolithic FLAC file.
   - Transcribe without diarization; output plain text with chunk boundary markers if chunked.
+  - Automatically format plain text into clean, line-bounded sentences (max 120 chars per line, target 3 sentences per line) to prevent multi-thousand-character single-line outputs.
 
 #### Route 2: English (`en-US` / `en-GB`)
 - **Constraint:** Diarization is supported. Enabling it triggers word-level timestamps, limiting BatchRecognize to **20-minute maximum file size**.
