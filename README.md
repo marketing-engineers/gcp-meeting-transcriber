@@ -1,6 +1,6 @@
 # Marketing Engineers: Transcription Automator v0.2
 
-This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud Speech-to-Text V2.
+This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud Speech-to-Text V2 (Chirp 3).
 
 ## Background
 There is a huge benefit to having a transcript of your meetings, but we don't like sharing recordings with third parties. Since we have been working with Google Cloud for years, we wanted to build a solution that is secure, private, and cost-effective.
@@ -8,7 +8,7 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
 ## Prerequisites
 
 - Python 3.10+
-- `ffmpeg` installed on your system and accessible via the command line (e.g., `sudo apt install ffmpeg` or `brew install ffmpeg`).
+- `ffmpeg` and `ffprobe` installed on your system and accessible via the command line (e.g., `sudo apt install ffmpeg` or `brew install ffmpeg`).
 - `gcloud` CLI installed and configured.
 
 ## Setup
@@ -37,13 +37,19 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    ```
    *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID. The default bucket `your-transcriber-bucket` is pre-configured for temporary audio uploads with a 7-day retention policy and public access prevention.*
 
-    Key environment variables:
-    - `TRANSCRIPTION_BATCH_SIZE` (Default: `5`): Maximum number of audio chunks submitted and monitored concurrently per batch to prevent GCP rate-limit (`429 RESOURCE_EXHAUSTED`) issues.
-    - `GCS_UPLOAD_TIMEOUT_SECONDS` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads. If you have large files and slow upload speeds, increase this to prevent timeout errors.
-    - `TRANSCRIPTION_MAX_TIMEOUT_SECONDS` (Default: `1800`): Overall maximum time cap in seconds (30 minutes) across the entire transcription job.
-    - `TRANSCRIPTION_MAX_CHARS_PER_LINE` (Default: `120`): Target maximum line length for transcript post-processing.
-    - `TRANSCRIPTION_MAX_SENTENCES_PER_LINE` (Default: `3`): Target maximum sentences per line.
-    - `TRANSCRIPTION_CUSTOM_PROMPT` (Optional): Custom prompt instruction passed to Chirp 3 models via `CustomPromptConfig`.
+   Key environment variables:
+   - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted and monitored concurrently per wave. (Renamed from `TRANSCRIPTION_BATCH_SIZE`; a migration guard will alert you if the old key is present).
+   - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` (Default: `2700` / 45 min): Maximum chunk duration ceiling for Dutch recordings.
+   - `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Maximum chunk duration ceiling for English recordings.
+   - `CHUNK_MIN_LENGTH_SECONDS` (Default: `600` / 10 min): Minimum chunk floor below which fixed GCP per-request overhead dominates.
+   - `CHUNK_SILENCE_SEARCH_WINDOW_SECONDS` (Default: `15`): Maximum search window in seconds to snap chunk cuts to natural pauses.
+   - `CHUNK_SILENCE_NOISE_THRESHOLD_DB` (Default: `-30`): Noise threshold in dB for FFmpeg `silencedetect`.
+   - `CHUNK_SILENCE_MIN_DURATION_SECONDS` (Default: `0.5`): Minimum pause duration in seconds to qualify as a cut point.
+   - `GCS_UPLOAD_TIMEOUT_SECONDS` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads.
+   - `TRANSCRIPTION_MAX_TIMEOUT_SECONDS` (Default: `1800`): Base maximum timeout cap; dynamically scales with total audio duration for long recordings.
+   - `TRANSCRIPTION_MAX_CHARS_PER_LINE` (Default: `120`): Target maximum line length for transcript post-processing.
+   - `TRANSCRIPTION_MAX_SENTENCES_PER_LINE` (Default: `3`): Target maximum sentences per line.
+   - `TRANSCRIPTION_CUSTOM_PROMPT` (Optional): Custom prompt instruction passed to Chirp 3 models via `CustomPromptConfig`.
 
 ## Usage
 
@@ -65,8 +71,79 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
 5. **Output:** The final transcripts will be saved in the `transcripts/` directory as both a human-readable text file and a raw JSON API response.
    Transcripts are automatically post-processed at sentence boundaries (`.`, `?`, `!`) to guarantee clean, line-bounded plain text (capped by default at 120 characters per line) for optimal compatibility with CLI tools, git diffs, and LLM contexts.
 
-### Bounded Batch Execution & Rate Protection
-When chunking long recordings, requests are submitted in bounded batches (controlled by `TRANSCRIPTION_BATCH_SIZE`, default: 5) with a 1-second submission spacing. Operation polling incorporates automated backoff and retry on transient `429 RESOURCE_EXHAUSTED` errors to prevent regional queue congestion and API throttling.
+### Process Flow & Architecture
+
+The following diagram illustrates how the automator evaluates audio recordings, determines chunking strategies and speaker diarization, uploads media to Google Cloud, and formats output transcripts:
+
+```mermaid
+flowchart TD
+    A["Input Media File<br/>(.mp4, .m4a, .wav, .mov, etc.)"] --> B["Phase 1: Audio Extraction<br/>FFmpeg lossless extraction to FLAC"]
+    B --> C["Measure Audio Duration &<br/>Detect Conversational Pauses"]
+    
+    C --> D{"Language Route?"}
+    
+    %% Dutch Path
+    D -->|"Dutch (nl-NL)"| E["Dutch Sizing Strategy:<br/>Adaptive Parallel Wave"]
+    E --> F{"Duration <= 45 min?"}
+    F -->|"Yes (N=1)"| G["Monolithic Audio File<br/>(0 Chunk Boundaries)"]
+    F -->|"No (N > 1)"| H["Split into N Chunks (max 5)<br/>Snap cuts to pauses within ±15s"]
+    
+    %% English Path
+    D -->|"English (en-US / en-GB)"| I["English Sizing Strategy:<br/>Ceiling-Driven Minimization"]
+    I --> J{"Duration <= 45 min?"}
+    J -->|"Yes (N=1)"| K["Monolithic Audio File<br/>(0 Chunk Boundaries)"]
+    J -->|"No (N > 1)"| L["Maximize Chunk Length (up to 45 min)<br/>Snap cuts to pauses within ±15s"]
+    
+    G --> M["Phase 2: Secure GCS Streaming<br/>2 MB Resumable Slices + Live Terminal Progress"]
+    H --> M
+    K --> N["Interactive Speaker Prompt<br/>(Auto-detect or User Input)"]
+    L --> N
+    N --> M
+    
+    M --> O["Phase 3: GCP Speech-to-Text V2<br/>Chirp 3 BatchRecognize in Bounded Waves"]
+    
+    O --> P{"Diarization Enabled?"}
+    P -->|"No (Dutch)"| Q["Stitch Plain Transcripts<br/>Insert Chunk Headers if chunked"]
+    P -->|"Yes (English)"| R["Format Speaker Dialogue<br/>(Speaker 1, Speaker 2...)"]
+    
+    Q --> S["Phase 4: Post-Processing<br/>Wrap Lines at Sentence Boundaries (max 120 chars)"]
+    R --> S
+    
+    S --> T["Final Artifacts Saved in transcripts/<br/>• .txt: Clean, Line-Bounded Transcript<br/>• .json: Full GCP API Metadata"]
+```
+
+#### Functional Step Breakdown
+
+1. **Audio Extraction & Normalization (FFmpeg):**
+   - Extracts audio from compressed video or voice recording containers (`.mp4`, `.m4a`, `.mov`, `.wav`) and transcodes losslessly to FLAC.
+   - FLAC provides standardized, uncompressed headers that allow Google Cloud to auto-detect sample rates and channel layouts without manual audio declaration.
+
+2. **Intelligent Language Routing & Chunk Sizing:**
+   - **Dutch (`nl-NL`) — Parallel Speed Optimization:** Diarization is not supported on Chirp 3 for Dutch, meaning chunk boundaries carry zero speaker-label penalty. Long files are split into up to 5 balanced chunks (`N = TRANSCRIPTION_CONCURRENCY`, minimum 10 min per chunk) so the entire recording transcribes concurrently in a single parallel wave in under ~2–3 minutes.
+   - **English (`en-US` / `en-GB`) — Boundary Minimization:** Speaker diarization is supported, but speaker IDs reset across chunk cuts. The pipeline maximizes chunk duration up to the 45-minute API ceiling (`CHUNK_MAX_LENGTH_SECONDS_ENGLISH=2700`) to keep long meetings in as few chunks as possible (e.g. a 90-minute meeting becomes just 2 chunks).
+   - **Silence Detection & Snapping:** Instead of cutting audio mid-sentence or mid-word, FFmpeg `silencedetect` locates natural conversational pauses (≥ 0.5s) within a `±15s` window around nominal cut points, ensuring conversational context remains unbroken.
+   - **Monolithic Route for Short Recordings:** Any recording ≤ 45 minutes bypasses chunking entirely and processes as a single monolithic FLAC.
+
+3. **Secure Cloud Streaming with Real-Time Feedback:**
+   - Audio is uploaded to a private GCS bucket (`gs://your-transcriber-bucket`) configured with 7-day retention and public access prevention.
+   - Uploads stream in 2 MB resumable chunks with live in-place terminal updates (like `wget`/`curl`) and clean, timestamped logs in `logs/app.log`.
+
+4. **Speech-to-Text V2 Batch Transcription:**
+   - Submits single-file BatchRecognize requests to Google Cloud Speech-to-Text V2 using Chirp 3.
+   - Uses adaptive polling intervals and automated exponential backoff on transient rate limits (`429 RESOURCE_EXHAUSTED`).
+
+5. **Post-Processing & Formatting:**
+   - English transcripts format dialogues by speaker (e.g., `Speaker 1: ...`, `Speaker 2: ...`).
+   - All transcripts are formatted across sentence boundaries (`.`, `?`, `!`) with a target line length of 120 characters, avoiding thousands of characters on a single line and optimizing for LLMs, diffs, and reading.
+
+---
+
+### Real-Time Upload Feedback & Dual Logging Architecture
+- **GCS Upload Streaming:** Large audio chunks are streamed to GCS in 2 MB resumable chunks. When running in an interactive terminal, upload progress updates in place on a single line (like `wget`/`curl`) every 5 seconds, displaying transferred megabytes, percentage, and real-time upload speed (MB/s).
+- **Dual Logging (`TerminalProgressHandler` + `CleanFileFormatter`):** The terminal receives dynamic in-place updates and multi-line ASCII progress matrices during transcription. Concurrently, `logs/app.log` and `logs/gcp_api.log` receive clean, formal, single-line entries without terminal escape sequences or multi-line art blocks.
+
+### Bounded Concurrency & Adaptive Polling
+Multi-chunk requests are submitted in bounded waves (controlled by `TRANSCRIPTION_CONCURRENCY`, default: 5) with 1-second submission spacing. Operation polling uses adaptive pre-delays and intervals scaled to expected chunk duration, with automated retry on transient `429 RESOURCE_EXHAUSTED` errors to prevent regional queue congestion and API throttling.
 
 ### Transcribing Existing GCS Files (`--from-gcs`)
 If audio chunks are already uploaded to Google Cloud Storage (e.g. following a recovery or re-run scenario), you can process them directly without local re-encoding or re-uploading:
@@ -81,7 +158,7 @@ python -m src.main --from-gcs gs://your-transcriber-bucket/sample-meeting-2026-0
 # Or using the dedicated module
 python -m src.transcribe_gcs sample-meeting-2026-08-20_20260820_152628 --lang nl-NL
 ```
-The GCS re-transcription workflow automatically discovers and sorts all audio chunks under the prefix, executes the bounded batch pipeline, stitches the transcripts, and saves output to `transcripts/`.
+The GCS re-transcription workflow automatically discovers and sorts all audio chunks under the prefix, executes the bounded concurrency pipeline, stitches the transcripts, and saves output to `transcripts/`.
 
 ### Partial Run (v0.1 Behavior)
 If you only want to extract and chunk the FLAC files without calling the GCP API, use the `--prepare-only` flag:
@@ -95,10 +172,16 @@ You can then manually upload the generated FLACs from the `output/` directory.
 The behavior of the script changes based on the language requested, to accommodate Google Cloud's Chirp 3 model constraints.
 
 #### Dutch (`--lang nl-NL`)
-- **Behavior:** Transcribes without diarization (as Chirp 3 does not support diarization for Dutch). Extracts audio losslessly into FLAC. If duration exceeds `CHUNK_LENGTH_SECONDS_DUTCH` (default: 5 minutes / 300s), audio is automatically split into chunks to prevent GCP BatchRecognize timeouts on the EU regional queue.
+- **Behavior:** Transcribes without diarization (as Chirp 3 does not support diarization for Dutch).
+- **Adaptive Parallel Wave:** Sizing optimizes purely for parallel wall-clock completion in one wave (`N = TRANSCRIPTION_CONCURRENCY`), floored at `CHUNK_MIN_LENGTH_SECONDS` (10 min) and capped at `CHUNK_MAX_LENGTH_SECONDS_DUTCH` (45 min).
+- **Silence Snapping:** Boundaries snap to natural pauses via FFmpeg `silencedetect` within a `±15s` window.
+- **Monolithic Path:** Short recordings (≤ 45 min) naturally process as a single monolithic FLAC with zero chunk cuts.
 
 #### English (`--lang en-US` or `--lang en-GB`)
-- **Behavior:** Extracts audio losslessly and splits the file into 15-minute chunks to stay under the 20-minute BatchRecognize limit for diarized audio. Automatically stitches the transcripts together after processing and inserts explicit chunk boundary headers with notices warning that speaker numbers do not correspond across chunk boundaries.
+- **Behavior:** Transcribes with speaker diarization.
+- **Ceiling-Driven Boundary Minimization:** Maximizes chunk duration up to the ceiling (`CHUNK_MAX_LENGTH_SECONDS_ENGLISH=2700`, 45 min) to minimize speaker ID fragmentation across chunk cuts.
+- **Silence Snapping:** Boundaries snap to natural pauses within `±15s`.
+- **Monolithic Path:** Short recordings (≤ 45 min) process monolithically without boundaries.
 
 ## Project Structure
 
@@ -111,12 +194,21 @@ The behavior of the script changes based on the language requested, to accommoda
 ├── input/                # (Optional) Drop raw media files here
 ├── output/               # Intermediate FLAC files appear here
 ├── transcripts/          # Final generated transcripts
-├── tests/                # Unit tests
+├── logs/                 # Rotating logs (app.log and gcp_api.log)
+├── tests/                # Unit and integration test suite
+│   ├── test_audio.py
+│   ├── test_config.py
+│   ├── test_gcs.py
+│   ├── test_logger.py
+│   ├── test_main.py
+│   ├── test_transcribe.py
+│   ├── test_transcribe_gcs.py
+│   └── test_transcript_output.py
 └── src/
-    ├── audio.py           # FFmpeg subprocess logic
-    ├── config.py          # Environment configuration
-    ├── gcs.py             # Google Cloud Storage operations
-    ├── logger.py          # Centralized logging setup
+    ├── audio.py           # FFmpeg subprocess logic & silence-aware chunking
+    ├── config.py          # Environment configuration & migration guard
+    ├── gcs.py             # Google Cloud Storage operations & progress reader
+    ├── logger.py          # Dual logging architecture (TTY in-place & clean file logs)
     ├── main.py            # CLI entry point and orchestration
     ├── transcribe.py      # Speech-to-Text V2 BatchRecognize logic
     ├── transcribe_gcs.py  # Direct GCS audio transcription & recovery
@@ -131,16 +223,3 @@ The behavior of the script changes based on the language requested, to accommoda
 - **Automatic LLM Summarization Pipeline**: Summarize stitched transcripts natively via Gemini.
 - **Denoiser Toggle**: FFmpeg noise reduction for phone recordings.
 - **Model Adaptation**: Domain-specific vocabulary hints.
-
----
-
-## Troubleshooting & Performance
-
-### Dutch (`nl-NL`) Queue Stalls & GDPR EU Residency Compliance
-The `GCP_REGION` is set to `eu` to enforce strict European data residency under GDPR compliance guidelines. However, Google Cloud's European multi-region endpoint (`eu-speech.googleapis.com`) occasionally places heavy 15-minute chunks on extended queue holds, leading to job stalls and timeouts.
-
-**GDPR-Compliant Resolution:**
-To bypass European queue congestion while maintaining 100% EU data residency, the pipeline splits Dutch recordings into shorter **5-minute chunks** (`CHUNK_LENGTH_SECONDS_DUTCH=300`). 
-* Smaller 5-minute chunks require significantly less processing footprint on the GCP backend.
-* Google's European queue slots these smaller chunks with high priority, completing them rapidly in parallel while keeping your audio data entirely inside the European Union.
-* To tune this behavior, adjust `CHUNK_LENGTH_SECONDS_DUTCH` in your `.env` file. Do not set `GCP_REGION=us` if you are bound by EU privacy laws.
