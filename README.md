@@ -36,10 +36,27 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    .githooks/install.sh
    ```
 
-4. **Authenticate with Google Cloud:**
-   ```bash
-   gcloud auth application-default login
-   ```
+4. **Authentication Modes:**
+   - **Local Workstation (ADC, Default):**
+     Authenticate via Application Default Credentials:
+     ```bash
+     gcloud auth application-default login
+     ```
+     With `GCP_AUTH_MODE=adc` (default), the application uses your user ADC.
+   - **Automated / Agent Deployments (Service Account Key):**
+     For running on a VPS or autonomous agent platform (e.g., Hermes), configure `GCP_AUTH_MODE=service_account_key` with a dedicated, least-privilege service account key file.
+     
+     **Required Scopes & Permissions Summary:**
+     - **Project Level:** Minimal custom role containing `speech.recognizers.recognize`, `speech.operations.get`, and `serviceusage.services.use`.
+     - **Dedicated Bucket Level Only:** Custom role containing `storage.objects.create`, `storage.objects.get`, `storage.objects.list`, and `storage.objects.delete`.
+     - *No broad roles (`speech.admin`, `storage.admin`, or project-wide storage roles) should ever be granted.*
+     
+     See the [Hermes Deployment Guide](docs/hermes-deployment.md) for the complete administrator runbook, step-by-step `gcloud` provisioning commands, key rotation, and VPS setup.
+   - **Validate Credentials & Permissions:**
+     You can verify your configuration and bucket permissions at any time without processing audio:
+     ```bash
+     python -m src.main --check-auth
+     ```
    *Note: Ensure the **Cloud Speech-to-Text API** is enabled in your GCP project. Quota project attribution is managed programmatically via the `.env` configuration file.*
 
 5. **Provision your private GCS Bucket:**
@@ -54,6 +71,14 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    cp .env.example .env
    ```
    *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID and `GCS_BUCKET_NAME` with your bucket name.*
+
+7. **Register Skill in Hermes / Agent Harness (Optional):**
+   If running on a VPS or host managed by a Hermes agent, register the skill so Hermes automatically recognizes and activates it:
+   ```bash
+   mkdir -p ~/.hermes/skills
+   ln -sf "$(pwd)/skills/gcp-audio-transcribe" ~/.hermes/skills/
+   ```
+   Once linked, Hermes indexes the skill definition and executes transcription workflows autonomously via `venv/bin/python -m src.main`.
 
    Key environment variables:
    - `TRANSCRIPTION_MODEL` (Default: `chirp_3`): Google Cloud Speech-to-Text V2 model identifier. Defaults to `chirp_3`, with support for all GCP V2 models including `chirp_2`, `chirp`, `long`, `short`, and `telephony`.

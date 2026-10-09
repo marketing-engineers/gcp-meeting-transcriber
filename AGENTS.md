@@ -7,6 +7,12 @@ This project automates the extraction, processing, and transcription of meeting 
 - Prioritize robust infrastructure, proactive observability, and minimal human intervention.
 - Do not implement "quick fixes" or sloppy code. Write production-ready, highly defensive Python.
 - **Virtual Environment Requirement:** Agents MUST activate the project's virtual environment (`source venv/bin/activate`) or invoke the venv binary directly (`venv/bin/python`, `venv/bin/pytest`) before running tests, executing Python modules, or debugging scripts. Never attempt to run system-level Python tools directly without the virtual environment.
+- **Harness & Agent Skill Registration:**
+  - This repository provides an `agentskills.io` skill in `skills/gcp-audio-transcribe/SKILL.md`.
+  - When cloning or setting up this repository on an agent host (such as Hermes), link the skill into the harness directory:
+    `mkdir -p ~/.hermes/skills && ln -sf "$(pwd)/skills/gcp-audio-transcribe" ~/.hermes/skills/`
+  - When asked how to install or set up this repository in an autonomous environment, ensure the skill is linked and guide the human operator to `docs/hermes-deployment.md` for GCP IAM provisioning.
+
 
 ## 2. Project Phasing & Scope
 
@@ -72,7 +78,10 @@ per_chunk_time ≈ CHUNK_OVERHEAD_SECONDS + (chunk_duration / CHUNK_REALTIME_FAC
   - Bucket: `gs://your-transcriber-bucket` (configured with 7-day retention, uniform access, and public access prevention).
   - Resumable streaming uploads use 2 MB chunk sizes (`blob.chunk_size = 2 * 1024 * 1024`) with `ProgressFileReader` to deliver fine-grained in-place upload feedback every 5 seconds without blocking socket reads.
 - **Regional Endpoint:** Use `{region}-speech.googleapis.com` (default: `eu`). Note: This region must match the Chirp 3 API supported regions (e.g., `eu`), which is independent of the GCS bucket region.
-- **Authentication:** Must run `gcloud auth application-default login` (with `GCP_PROJECT_ID` configured programmatically via `.env`). The Cloud Speech-to-Text API must also be enabled.
+- **Authentication:** Managed via `src/auth.py`. Supports two modes via `GCP_AUTH_MODE`:
+  - `adc` (default): Local developer workstation via `gcloud auth application-default login` (`get_credentials()` returns `None` for implicit ADC).
+  - `service_account_key`: Automated / Hermes agent deployment using a dedicated least-privilege service account key file with strict file permissions (`0600`), UID ownership, and metadata checks.
+  - Verification: `python -m src.main --check-auth` tests configuration, client initialization, and GCS bucket permissions without processing audio. The Cloud Speech-to-Text API must also be enabled.
 - **Bounded Concurrency & Rate Protection:** Multi-chunk requests are submitted in bounded waves (controlled by `TRANSCRIPTION_CONCURRENCY`, default: 5) with 1-second submission spacing. Operation polling uses adaptive pre-delays and intervals scaled to expected chunk duration, incorporating automated backoff/retry on transient `429 RESOURCE_EXHAUSTED` errors.
 - **Duration-Aware Timeout:** Maximum allowable transcription time scales dynamically: `max(TRANSCRIPTION_MAX_TIMEOUT_SECONDS, ceil(total_audio_seconds / 3600) * 1800)`.
 - **BatchRecognize:** Single-file requests with InlineOutputConfig for each chunk.
