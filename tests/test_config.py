@@ -93,9 +93,47 @@ def test_validate_gcp_config_valid():
     """validate_gcp_config passes when required vars are set."""
     from src.config import validate_gcp_config
 
-    with patch("src.config.GCP_PROJECT_ID", "my-project"), \
+    with patch("src.config.GCP_AUTH_MODE", "adc"), \
+         patch("src.config.GCP_PROJECT_ID", "my-project"), \
          patch("src.config.GCS_BUCKET_NAME", "my-bucket"):
         validate_gcp_config()  # Should not raise
+
+
+def test_validate_gcp_config_invalid_auth_mode():
+    """validate_gcp_config raises ValueError on invalid GCP_AUTH_MODE."""
+    from src.config import validate_gcp_config
+
+    with patch("src.config.GCP_AUTH_MODE", "invalid_mode"), \
+         patch("src.config.GCP_PROJECT_ID", "my-project"), \
+         patch("src.config.GCS_BUCKET_NAME", "my-bucket"):
+        with pytest.raises(ValueError, match="Invalid GCP_AUTH_MODE: 'invalid_mode'"):
+            validate_gcp_config()
+
+
+def test_validate_gcp_config_key_mode_missing_vars():
+    """validate_gcp_config in service_account_key mode raises ValueError if key vars missing."""
+    from src.config import validate_gcp_config
+
+    with patch("src.config.GCP_AUTH_MODE", "service_account_key"), \
+         patch("src.config.GCP_PROJECT_ID", "my-project"), \
+         patch("src.config.GCS_BUCKET_NAME", "my-bucket"), \
+         patch("src.config.GCP_SERVICE_ACCOUNT_KEY_FILE", None), \
+         patch("src.config.GCP_EXPECTED_SERVICE_ACCOUNT", None):
+        with pytest.raises(ValueError, match="GCP_SERVICE_ACCOUNT_KEY_FILE, GCP_EXPECTED_SERVICE_ACCOUNT"):
+            validate_gcp_config()
+
+
+def test_validate_gcp_config_key_mode_valid():
+    """validate_gcp_config passes in service_account_key mode when all required vars are set."""
+    from src.config import validate_gcp_config
+
+    with patch("src.config.GCP_AUTH_MODE", "service_account_key"), \
+         patch("src.config.GCP_PROJECT_ID", "my-project"), \
+         patch("src.config.GCS_BUCKET_NAME", "my-bucket"), \
+         patch("src.config.GCP_SERVICE_ACCOUNT_KEY_FILE", "/path/to/key.json"), \
+         patch("src.config.GCP_EXPECTED_SERVICE_ACCOUNT", "sa@proj.iam.gserviceaccount.com"):
+        validate_gcp_config()  # Should not raise
+
 
 
 def test_gcs_upload_timeout_default():

@@ -111,6 +111,12 @@ TRANSCRIPTION_MAX_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_MAX_TIMEOUT_SEC
 GCS_UPLOAD_TIMEOUT_SECONDS: int = _get_int("GCS_UPLOAD_TIMEOUT_SECONDS", 600)
 TRANSCRIPTION_CUSTOM_PROMPT: str | None = _get_optional_str("TRANSCRIPTION_CUSTOM_PROMPT")
 
+# GCP Authentication Configuration
+GCP_AUTH_MODE: str = _get_str("GCP_AUTH_MODE", "adc").lower()
+GCP_SERVICE_ACCOUNT_KEY_FILE: str | None = _get_optional_str("GCP_SERVICE_ACCOUNT_KEY_FILE")
+GCP_EXPECTED_SERVICE_ACCOUNT: str | None = _get_optional_str("GCP_EXPECTED_SERVICE_ACCOUNT")
+
+
 
 def validate_extension(file_path: str) -> bool:
     """Checks if a given file has a supported extension."""
@@ -120,14 +126,26 @@ def validate_extension(file_path: str) -> bool:
 
 def validate_gcp_config() -> None:
     """
-    Validates that required GCP configuration is present.
-    Raises ValueError with actionable message if missing.
+    Validates that required GCP configuration is present and valid.
+    Raises ValueError with actionable message if missing or invalid.
     """
+    if GCP_AUTH_MODE not in ("adc", "service_account_key"):
+        raise ValueError(
+            f"Invalid GCP_AUTH_MODE: '{GCP_AUTH_MODE}'. "
+            f"Must be either 'adc' or 'service_account_key'."
+        )
+
     missing: list[str] = []
     if not GCP_PROJECT_ID:
         missing.append("GCP_PROJECT_ID")
     if not GCS_BUCKET_NAME:
         missing.append("GCS_BUCKET_NAME")
+
+    if GCP_AUTH_MODE == "service_account_key":
+        if not GCP_SERVICE_ACCOUNT_KEY_FILE:
+            missing.append("GCP_SERVICE_ACCOUNT_KEY_FILE")
+        if not GCP_EXPECTED_SERVICE_ACCOUNT:
+            missing.append("GCP_EXPECTED_SERVICE_ACCOUNT")
 
     if missing:
         raise ValueError(
