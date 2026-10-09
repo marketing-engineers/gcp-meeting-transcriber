@@ -150,6 +150,30 @@ class TestCLIArgumentParsing:
                 with pytest.raises(SystemExit):
                     main()
 
+    def test_check_auth_flag_success(self):
+        """--check-auth flag executes check_auth and exits with 0 on success."""
+        test_args = ["prog", "--check-auth"]
+        with patch.object(sys, "argv", test_args):
+            with patch("src.main.setup_logging"), \
+                 patch("src.main.check_auth", return_value=True) as mock_check:
+                from src.main import main
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 0
+                mock_check.assert_called_once()
+
+    def test_check_auth_flag_failure(self):
+        """--check-auth flag executes check_auth and exits with 1 on failure."""
+        test_args = ["prog", "--check-auth"]
+        with patch.object(sys, "argv", test_args):
+            with patch("src.main.setup_logging"), \
+                 patch("src.main.check_auth", return_value=False) as mock_check:
+                from src.main import main
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
+                mock_check.assert_called_once()
+
 
 class TestProcessFileDutchRoute:
     """Tests for process_file routing through Dutch route (monolithic vs chunked)."""

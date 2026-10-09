@@ -5,7 +5,27 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.audio import ProcessingError
-from src.transcribe import transcribe_files, transcribe_single_file
+from src.transcribe import transcribe_files, transcribe_single_file, _get_speech_client
+
+
+class TestSpeechClientCreation:
+    """Tests for _get_speech_client credential pass-through."""
+
+    @patch("src.transcribe.SpeechClient")
+    @patch("src.auth.get_credentials")
+    def test_get_speech_client_passes_credentials(self, mock_get_creds, mock_speech_client):
+        """_get_speech_client passes resolved credentials to SpeechClient."""
+        mock_creds = MagicMock()
+        mock_get_creds.return_value = mock_creds
+
+        client = _get_speech_client("eu")
+
+        mock_get_creds.assert_called_once()
+        assert mock_speech_client.call_count == 1
+        call_kwargs = mock_speech_client.call_args[1]
+        assert call_kwargs["credentials"] == mock_creds
+        assert call_kwargs["client_options"].api_endpoint == "eu-speech.googleapis.com"
+        assert call_kwargs["client_options"].quota_project_id == "test-project"
 
 
 def _make_mock_op(done: bool = True, progress: int = 100, result_val: MagicMock | None = None) -> MagicMock:

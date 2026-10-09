@@ -13,7 +13,25 @@ from src.gcs import (
     list_gcs_uris_under_prefix,
     upload_files_to_gcs,
     upload_to_gcs,
+    _get_client,
 )
+
+
+class TestGcsClientCreation:
+    """Tests for _get_client credential pass-through and caching."""
+
+    @patch("google.cloud.storage.Client")
+    @patch("src.auth.get_credentials")
+    def test_get_client_passes_credentials(self, mock_get_creds, mock_storage_client):
+        """_get_client passes resolved credentials to storage.Client."""
+        mock_creds = MagicMock()
+        mock_get_creds.return_value = mock_creds
+
+        client = _get_client()
+
+        mock_get_creds.assert_called_once()
+        mock_storage_client.assert_called_once_with(project="test-project", credentials=mock_creds)
+        assert client == mock_storage_client.return_value
 
 
 class TestProgressFileReader:

@@ -80,17 +80,21 @@ def _build_recognition_config(
 def _get_speech_client(region: str) -> SpeechClient:
     """Create a Speech-to-Text V2 client with the regional endpoint."""
     from src.config import GCP_PROJECT_ID
+    from src.auth import get_credentials, auth_hint
+
     api_endpoint = f"{region}-speech.googleapis.com"
     client_options = ClientOptions(
         api_endpoint=api_endpoint,
         quota_project_id=GCP_PROJECT_ID,
     )
     try:
-        return SpeechClient(client_options=client_options)
+        credentials = get_credentials()
+        return SpeechClient(credentials=credentials, client_options=client_options)
     except Exception as e:
+        if isinstance(e, ProcessingError):
+            raise
         raise ProcessingError(
-            f"Failed to create Speech-to-Text client (endpoint: {api_endpoint}).\n"
-            f"Ensure you have authenticated: gcloud auth application-default login\n"
+            f"Failed to create Speech-to-Text client (endpoint: {api_endpoint}). {auth_hint()}\n"
             f"Original error: {e}"
         ) from e
 
@@ -341,7 +345,11 @@ def transcribe_files(
             ) from e
         except gcp_exceptions.PermissionDenied as e:
             raise ProcessingError(
-                f"Permission denied for Speech-to-Text API.\nOriginal error: {e}"
+                f"Permission denied for Speech-to-Text API.\n"
+                f"Ensure your identity has 'speech.recognizers.recognize' and 'serviceusage.services.use' on project '{project_id}'.\n"
+                f"If the request failed reading GCS audio, ensure the Speech service agent "
+                f"(service-<PROJECT_NUMBER>@gcp-sa-speech.iam.gserviceaccount.com) has 'roles/storage.objectViewer' on the bucket.\n"
+                f"Original error: {e}"
             ) from e
         except gcp_exceptions.NotFound as e:
             raise ProcessingError(
@@ -390,6 +398,13 @@ def transcribe_files(
                         "Chunk %d: transient 429 ResourceExhausted on status poll, will retry in %.1fs.",
                         item["chunk_index"], effective_poll_interval,
                     )
+                except gcp_exceptions.PermissionDenied as e:
+                    chunk_statuses[item["chunk_index"]] = "error"
+                    raise ProcessingError(
+                        f"Permission denied polling status for Chunk {item['chunk_index']} ({item['gcs_uri']}).\n"
+                        f"Ensure your identity has 'speech.operations.get' on project '{project_id}'.\n"
+                        f"Original error: {e}"
+                    ) from e
                 except Exception as e:
                     chunk_statuses[item["chunk_index"]] = "error"
                     raise ProcessingError(

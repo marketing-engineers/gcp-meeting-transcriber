@@ -15,19 +15,29 @@ logger = logging.getLogger(__name__)
 _client: storage.Client | None = None
 
 
+def reset_client_cache() -> None:
+    """Resets the cached GCS client (primarily for tests)."""
+    global _client
+    _client = None
+
+
 def _get_client() -> storage.Client:
     """Create or return cached GCS client with error handling for authentication issues."""
     global _client
     if _client is not None:
         return _client
     from src.config import GCP_PROJECT_ID
+    from src.auth import get_credentials, auth_hint
+
     try:
-        _client = storage.Client(project=GCP_PROJECT_ID)
+        credentials = get_credentials()
+        _client = storage.Client(project=GCP_PROJECT_ID, credentials=credentials)
         return _client
     except Exception as e:
+        if isinstance(e, ProcessingError):
+            raise
         raise ProcessingError(
-            f"Failed to create GCS client. Ensure you have authenticated:\n"
-            f"  Run: gcloud auth application-default login\n"
+            f"Failed to create GCS client. {auth_hint()}\n"
             f"Original error: {e}"
         ) from e
 
@@ -157,7 +167,8 @@ def upload_to_gcs(
     except gcp_exceptions.Forbidden as e:
         raise ProcessingError(
             f"Permission denied uploading to gs://{bucket_name}/{blob_name}. "
-            f"Ensure your account has the 'Storage Object Admin' role.\n"
+            f"Ensure your identity has the required object permissions (storage.objects.create, "
+            f"storage.objects.get, storage.objects.list, storage.objects.delete) on bucket '{bucket_name}'.\n"
             f"Original error: {e}"
         ) from e
     except Exception as e:

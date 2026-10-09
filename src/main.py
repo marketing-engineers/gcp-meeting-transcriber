@@ -42,6 +42,7 @@ from src.transcript_output import (
     stitch_plain_transcripts,
 )
 from src.transcribe_gcs import transcribe_from_gcs
+from src.auth import check_auth
 from src.logger import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -456,10 +457,17 @@ def main() -> None:
     )
     parser.add_argument(
         "--lang",
-        required=True,
+        required=False,
+        default=None,
         choices=[code.lower() for code in LANGUAGE_CODES_ALL],
         type=str.lower,
         help="Language of the recording (determines processing route)",
+    )
+    parser.add_argument(
+        "--check-auth",
+        action="store_true",
+        default=False,
+        help="Validate GCP credentials, configuration, and bucket permissions, then exit.",
     )
     parser.add_argument(
         "--prepare-only",
@@ -484,6 +492,13 @@ def main() -> None:
     args = parser.parse_args()
 
     logger.info("Starting Marketing Engineers Transcription Automator v0.2")
+
+    if args.check_auth:
+        ok = check_auth()
+        sys.exit(0 if ok else 1)
+
+    if not args.lang:
+        parser.error("--lang is required when processing audio.")
 
     if not args.input_file and not args.from_gcs:
         parser.error("Either input_file or --from-gcs must be specified.")
