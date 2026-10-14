@@ -54,6 +54,24 @@ Extract audio and split into FLAC chunks without uploading to GCP or making clou
 venv/bin/python -m src.main input/recording.mp4 --lang nl-NL --prepare-only
 ```
 
+## Output Delivery & Post-Processing Guidelines
+
+### 1. Deliver as File Attachment (Required)
+- **Send File Attachment:** Once transcription finishes, the primary deliverable is the generated transcript file: `transcripts/<basename>_<lang>_transcript.txt`.
+- When attachments/file uploads are supported by the messaging platform or agent environment, the agent **MUST send this `.txt` file as an attachment** immediately.
+- **Do NOT Paste Full Transcripts in Chat:** The agent must never dump the raw or full transcript text directly into chat messages. Dumping large transcripts causes message truncation, token bloat, formatting issues, and accidental hallucination. Only provide a concise status message confirming completion (e.g., output file location, language processed).
+
+### 2. No Autonomous Post-Processing (Strict Guardrail)
+- **Zero Hallucination / No Name Inference:** GCP Speech-to-Text V2 (Chirp 3) only produces generic numerical speaker tags (`Speaker 1:`, `Speaker 2:`) for English, and plain text without speaker tags for Dutch. GCP does not have access to attendee names.
+- The agent **MUST NEVER** autonomously infer speaker identities or replace `Speaker 1`/`Speaker 2` with real person names based on conversation context or greetings.
+- The agent **MUST NEVER** alter, rewrite, or summarize the transcript text prior to delivering the file attachment. The raw transcript must always be delivered untouched.
+
+### 3. User-Directed Post-Processing Flow
+- **Transcribe First, Ask Second:** The agent must follow a strict two-phase workflow:
+  1. Complete transcription and immediately deliver the untouched transcript file as an attachment.
+  2. Ask the user if they would like any post-processing performed (for example: identifying speakers, resolving entities against a glossary, extracting action items, or generating a meeting summary).
+- Do not execute any post-processing or text manipulation unless the user explicitly requests it in a follow-up prompt.
+
 ## Critical Security Guardrails & Operational Constraints
 
 1. **Service Account Provisioning & Least-Privilege Scope:**

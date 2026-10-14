@@ -207,6 +207,12 @@ approvals:
 ```
 *(Note: As documented by Hermes, `approvals.deny` is a policy guardrail, not a cryptographic security boundary. Least privilege at the GCP IAM level is the true enforcement mechanism).*
 
+### Agent Behavior & Delivery Workflow
+The skill (`skills/gcp-audio-transcribe/SKILL.md`) directs Hermes to:
+1. Deliver the final transcript (`transcripts/<basename>_<lang>_transcript.txt`) as a file attachment rather than dumping text in chat.
+2. Deliver the GCP output verbatim without autonomous speaker name inference or rewriting.
+3. Prompt the user after delivery before performing any post-processing (e.g., entity resolution, summaries).
+
 ---
 
 ## 5. Key Rotation & Revocation
