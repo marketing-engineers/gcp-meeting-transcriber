@@ -213,11 +213,11 @@ def validate_backend_config(model: str = "auto", backend: str | None = None) -> 
         if effective_backend == "vertex":
             validate_gcp_config()
             return
-        # auto backend
-        if GEMINI_API_KEY:
-            return
+        # auto backend: prefers unified GCP (Vertex AI) if configured, falls back to API key
         if GCP_PROJECT_ID:
             validate_gcp_config()
+            return
+        if GEMINI_API_KEY:
             return
         raise ValueError(
             "Missing configuration for gemini-3.5-transcribe. "

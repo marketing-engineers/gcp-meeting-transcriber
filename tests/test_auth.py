@@ -274,10 +274,13 @@ class TestCheckAuth:
         with patch("src.config.GEMINI_BACKEND", "vertex"):
             assert get_gemini_backend_mode() == "vertex"
 
+        # In auto mode, GCP_PROJECT_ID takes precedence (unified GCP setup for Chirp + Gemini)
         with patch("src.config.GEMINI_BACKEND", "auto"), \
+             patch("src.config.GEMINI_API_KEY", "test-key"), \
              patch("src.config.GCP_PROJECT_ID", "my-project"):
             assert get_gemini_backend_mode() == "vertex"
 
+        # If GCP_PROJECT_ID is not set, auto falls back to api_key if GEMINI_API_KEY is set
         with patch("src.config.GEMINI_BACKEND", "auto"), \
              patch("src.config.GCP_PROJECT_ID", None), \
              patch("src.config.GEMINI_API_KEY", "test-key"):
@@ -296,6 +299,18 @@ class TestCheckAuth:
             assert check_auth() is True
         mock_genai_client.assert_called_once_with(api_key="valid-key")
 
+    @patch("google.genai.Client")
+    def test_check_auth_gemini_api_key_invalid(self, mock_genai_client):
+        """check_auth returns False when GEMINI_API_KEY ping fails."""
+        mock_instance = MagicMock()
+        mock_instance.models.list.side_effect = Exception("400 API_KEY_INVALID")
+        mock_genai_client.return_value = mock_instance
+
+        with patch("src.config.GEMINI_API_KEY", "invalid-key"), \
+             patch("src.config.GCP_PROJECT_ID", None), \
+             patch("src.config.GCS_BUCKET_NAME", None):
+            assert check_auth() is False
+
     @patch("src.gcs._get_client")
     @patch("src.transcribe._get_speech_client")
     def test_check_auth_speech_service_disabled(self, mock_get_speech, mock_get_gcs):
@@ -310,6 +325,37 @@ class TestCheckAuth:
              patch("src.config.GCP_PROJECT_ID", "test-project"), \
              patch("src.config.GCS_BUCKET_NAME", "test-bucket"):
             assert check_auth() is False
+
+    @patch("src.gcs._get_client")
+    @patch("src.transcribe._get_speech_client")
+    def test_check_auth_speech_permission_denied_warning(self, mock_get_speech, mock_get_gcs):
+        """check_auth logs a warning and continues when Speech recognizer returns PERMISSION_DENIED."""
+        mock_gcs = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.test_iam_permissions.return_value = [
+            "storage.objects.create", "storage.objects.get", "storage.objects.list", "storage.objects.delete"
+        ]
+        mock_gcs.bucket.return_value = mock_bucket
+        mock_get_gcs.return_value = mock_gcs
+
+        mock_speech = MagicMock()
+        mock_speech.list_recognizers.side_effect = Exception(
+            "403 PERMISSION_DENIED: Permission 'speech.recognizers.list' denied on resource "
+            "(speech.googleapis.com:443)"
+        )
+        mock_get_speech.return_value = mock_speech
+
+        with patch("src.config.GCP_AUTH_MODE", "adc"), \
+             patch("src.config.GCP_PROJECT_ID", "test-project"), \
+             patch("src.config.GCS_BUCKET_NAME", "test-bucket"), \
+             patch("src.config.GEMINI_BACKEND", "api_key"), \
+             patch("src.config.GEMINI_API_KEY", "dummy-key"), \
+             patch("google.genai.Client") as mock_genai:
+            mock_genai_inst = MagicMock()
+            mock_genai_inst.models.list.return_value = [MagicMock()]
+            mock_genai.return_value = mock_genai_inst
+            # Should pass because speech permission error does not fail check_auth (first job tests actual recognize permissions)
+            assert check_auth() is True
 
     @patch("src.gcs._get_client")
     @patch("src.transcribe._get_speech_client")

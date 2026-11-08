@@ -181,9 +181,10 @@ def get_gemini_backend_mode() -> str:
     """
     Resolves the active backend mode for Gemini 3.5 Transcribe.
     Returns:
+        'vertex'  if GEMINI_BACKEND == 'vertex' or
+                  (GEMINI_BACKEND == 'auto' and GCP_PROJECT_ID is set).
         'api_key' if GEMINI_BACKEND == 'api_key' or
-                  (GEMINI_BACKEND == 'auto' and GEMINI_API_KEY is set and GCP_PROJECT_ID is unset).
-        'vertex'  if GCP_PROJECT_ID is configured and GEMINI_BACKEND in ('auto', 'vertex').
+                  (GEMINI_BACKEND == 'auto' and not GCP_PROJECT_ID and GEMINI_API_KEY is set).
         Defaults to 'api_key'.
     """
     from src.config import GCP_PROJECT_ID, GEMINI_API_KEY, GEMINI_BACKEND
@@ -192,7 +193,7 @@ def get_gemini_backend_mode() -> str:
         return "api_key"
     if GEMINI_BACKEND == "vertex":
         return "vertex"
-    # GEMINI_BACKEND == "auto"
+    # GEMINI_BACKEND == "auto": GCP credentials take precedence (unified GCP setup for Chirp + Gemini)
     if GCP_PROJECT_ID:
         return "vertex"
     if GEMINI_API_KEY:
@@ -243,9 +244,10 @@ def check_auth() -> bool:
             try:
                 _ = list(ai_client.models.list(config={"page_size": 1}))
                 logger.info("  Gemini API (AI Studio) key validated and active.")
+                logger.info("=== Gemini API Authentication Check PASSED ===")
             except Exception as ping_err:
-                logger.warning("  Gemini API key ping note: %s", ping_err)
-            logger.info("=== Gemini API Authentication Check PASSED ===")
+                logger.error("Failed to validate Gemini API key: %s", ping_err)
+                all_passed = False
         except Exception as e:
             logger.error("Failed to initialize Gemini API client: %s", e)
             all_passed = False
@@ -296,7 +298,7 @@ def check_auth() -> bool:
                 logger.info("Speech-to-Text V2 API (speech.googleapis.com) verified active.")
             except Exception as api_err:
                 err_str = str(api_err)
-                if "SERVICE_DISABLED" in err_str or "speech.googleapis.com" in err_str:
+                if "SERVICE_DISABLED" in err_str or ("403" in err_str and "has not been used" in err_str):
                     logger.error(
                         "Speech-to-Text V2 API (speech.googleapis.com) is disabled on project '%s'.\n"
                         "Enable it with: gcloud services enable speech.googleapis.com --project=%s",
@@ -304,6 +306,13 @@ def check_auth() -> bool:
                         GCP_PROJECT_ID,
                     )
                     return False
+                elif "PERMISSION_DENIED" in err_str or ("403" in err_str and "Permission" in err_str):
+                    logger.warning(
+                        "Speech-to-Text V2 API permission notice on project '%s': %s\n"
+                        "Ensure your service account/user has role 'roles/speech.client' or 'roles/speech.admin'.",
+                        GCP_PROJECT_ID,
+                        api_err,
+                    )
                 else:
                     logger.info("Speech-to-Text API connectivity confirmed (notice: %s).", api_err)
         except Exception as e:
@@ -359,7 +368,7 @@ def check_auth() -> bool:
                     logger.info("Gemini Vertex AI API (aiplatform.googleapis.com) verified active.")
                 except Exception as vertex_err:
                     err_str = str(vertex_err)
-                    if "aiplatform.googleapis.com" in err_str or "SERVICE_DISABLED" in err_str:
+                    if "SERVICE_DISABLED" in err_str or ("403" in err_str and "has not been used" in err_str):
                         msg = (
                             f"Vertex AI API (aiplatform.googleapis.com) is disabled on project '{GCP_PROJECT_ID}'.\n"
                             f"Remediation:\n"
@@ -377,7 +386,7 @@ def check_auth() -> bool:
                                 "Vertex AI check note (fallback available via GEMINI_API_KEY): %s",
                                 vertex_err,
                             )
-                    elif "PERMISSION_DENIED" in err_str or "403" in err_str:
+                    elif "PERMISSION_DENIED" in err_str or ("403" in err_str and "Permission" in err_str):
                         msg = (
                             f"Vertex AI permission check failed for project '{GCP_PROJECT_ID}': {vertex_err}\n"
                             f"Ensure service account has 'aiplatform.endpoints.predict' (or role 'roles/aiplatform.user')."
