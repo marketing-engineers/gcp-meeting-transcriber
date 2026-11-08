@@ -244,9 +244,8 @@ def _responses_to_dict(
         elif hasattr(r, "__dict__"):
             try:
                 d = {k: v for k, v in r.__dict__.items() if not k.startswith("_")}
-                json.dumps(d, default=str)
-                converted.append(d)
                 converted.append(json.loads(json.dumps(d, default=str)))
+            except Exception:
                 converted.append({"output_text": getattr(r, "output_text", str(r))})
         else:
             converted.append({"output_text": str(r)})
@@ -256,7 +255,8 @@ def _responses_to_dict(
 def normalize_speaker_label(label: Any) -> str:
     """
     Normalizes a speaker label to a standard 'Speaker X' format.
-    Handles 'spk_1', 'spk_01', '1', 1, 'Speaker 1', etc.
+    Handles 'spk_1', 'spk_01', 'spk_0', 'spk:0', 'spk:1', '1', 1, 'Speaker 1', etc.
+    0-based speaker tags (e.g., 'spk:0', 'spk_0', 0) are converted to 1-based (Speaker 1).
     """
     if label is None:
         return "Speaker 1"
@@ -265,17 +265,23 @@ def normalize_speaker_label(label: Any) -> str:
     if not label_str:
         return "Speaker 1"
 
-    m_spk = re.match(r"^spk_?(\d+)$", label_str, re.I)
+    m_spk = re.match(r"^spk[_:]?(\d+)$", label_str, re.I)
     if m_spk:
         num = int(m_spk.group(1))
-        return f"Speaker {num}"
+        # 0-based tags like spk:0 or spk_0 offset to Speaker 1
+        speaker_idx = num + 1 if num == 0 else num
+        return f"Speaker {speaker_idx}"
 
     m_speaker = re.match(r"^Speaker\s*(\d+)$", label_str, re.I)
     if m_speaker:
-        return f"Speaker {int(m_speaker.group(1))}"
+        num = int(m_speaker.group(1))
+        speaker_idx = num + 1 if num == 0 else num
+        return f"Speaker {speaker_idx}"
 
     if label_str.isdigit():
-        return f"Speaker {int(label_str)}"
+        num = int(label_str)
+        speaker_idx = num + 1 if num == 0 else num
+        return f"Speaker {speaker_idx}"
 
     return label_str
 
@@ -426,7 +432,7 @@ def format_gemini_diarized_transcript(
                     continue
 
                 m = re.match(
-                    r"^(?:\[?(spk_?\d+|Speaker\s*\d+)\]?|\b(spk_\d+)\b):\s*(.*)$",
+                    r"^(?:\[?(spk[_:]?\d+|Speaker\s*\d+)\]?|\b(spk[_:]\d+)\b):\s*(.*)$",
                     line_str,
                     re.I,
                 )

@@ -30,6 +30,9 @@ class TestNormalizeSpeakerLabel:
         assert normalize_speaker_label("spk_2") == "Speaker 2"
         assert normalize_speaker_label("spk_01") == "Speaker 1"
         assert normalize_speaker_label("spk_0") == "Speaker 1"
+        assert normalize_speaker_label("spk:0") == "Speaker 1"
+        assert normalize_speaker_label("spk:1") == "Speaker 1"
+        assert normalize_speaker_label("spk:2") == "Speaker 2"
 
     def test_speaker_tags(self):
         assert normalize_speaker_label("Speaker 1") == "Speaker 1"
