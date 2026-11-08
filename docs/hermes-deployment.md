@@ -152,7 +152,14 @@ On the Hermes VPS, run under the unprivileged `hermes` OS user:
 3. **Configure `.env` for Hermes:**
    ```bash
    cat <<EOF > .env
-   # GCP Authentication Mode
+   # Model Selection ('auto', 'gemini-3.5-transcribe', or 'chirp_3')
+   TRANSCRIPTION_MODEL=auto
+
+   # Option A: Gemini AI Studio Key (Zero-GCP setup, minimal IAM)
+   # GEMINI_API_KEY=your-gemini-api-key
+   GEMINI_BACKEND=auto
+
+   # Option B: GCP Service Account Mode (Chirp 3 and Vertex AI)
    GCP_AUTH_MODE=service_account_key
    GCP_SERVICE_ACCOUNT_KEY_FILE=/home/hermes/.config/gcp-audio-transcribe/hermes-sa.json
    GCP_EXPECTED_SERVICE_ACCOUNT=hermes-transcriber@${PROJECT_ID}.iam.gserviceaccount.com
@@ -161,7 +168,6 @@ On the Hermes VPS, run under the unprivileged `hermes` OS user:
    GCP_PROJECT_ID=${PROJECT_ID}
    GCS_BUCKET_NAME=${PROJECT_ID}-hermes-transcribe
    GCP_REGION=eu
-   TRANSCRIPTION_MODEL=chirp_3
    TRANSCRIPTION_CONCURRENCY=5
    TRANSCRIPTION_MAX_TIMEOUT_SECONDS=1800
    GCS_UPLOAD_TIMEOUT_SECONDS=600

@@ -1,14 +1,42 @@
 # Marketing Engineers: Transcription Automator v0.2
 
-This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud Speech-to-Text V2 (Chirp 3).
+This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud AI models: Google Cloud Speech-to-Text V2 (Chirp 3) and Gemini 3.5 Transcribe (`gemini-3.5-transcribe`).
 
 ## Background
 There is a huge benefit to having a transcript of your meetings, but we don't like sharing recordings with third parties. Since we have been working with Google Cloud for years, we wanted to build a solution that is secure, private, and cost-effective.
 
+## Quickstart Options
+
+### Option A: Zero-GCP Setup (Gemini API Key)
+Get started in 2 minutes with no GCP project or cloud bucket needed:
+1. Obtain an API key from [Google AI Studio](https://aistudio.google.com/).
+2. Set it in `.env`:
+   ```bash
+   cp .env.example .env
+   # Add your key to .env:
+   # GEMINI_API_KEY=AIzaSy...
+   ```
+3. Run transcription:
+   ```bash
+   python -m src.main input/meeting.mp4 --lang nl-NL
+   ```
+
+### Option B: Enterprise GCP / GCS Setup (Vertex AI & Chirp 3)
+For high-volume enterprise workloads, Speech-to-Text V2, or Vertex AI:
+1. Authenticate with GCP:
+   ```bash
+   gcloud auth application-default login
+   ```
+2. Provision a GCS bucket and configure `GCP_PROJECT_ID` and `GCS_BUCKET_NAME` in `.env`.
+3. Verify authentication:
+   ```bash
+   python -m src.main --check-auth
+   ```
+
 ## Data Handling & Privacy
 
-- **Your Cloud, Your Data:** Audio is processed using your own Google Cloud project and uploaded temporarily to your private Google Cloud Storage (GCS) bucket.
-- **Automated Cleanup:** Audio chunks uploaded to GCS are automatically deleted in a `finally` execution block upon completion or failure.
+- **Your Cloud, Your Data:** Audio is processed using your own Google AI Studio key or your private Google Cloud Storage (GCS) bucket.
+- **Automated Cleanup:** Audio chunks uploaded to Gemini Files API or GCS are automatically deleted in a `finally` execution block upon completion or failure.
 - **Bucket Hardening:** We recommend configuring your GCS bucket with Uniform Bucket-Level Access, Public Access Prevention, and a 7-day lifecycle deletion policy.
 - **Local Isolation:** Raw media (`input/`), intermediate audio (`output/`), generated transcripts (`transcripts/`), and local logs (`logs/`) are strictly gitignored with built-in pre-commit guardrails to prevent accidental commits of confidential data.
 
@@ -16,7 +44,7 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
 
 - Python 3.10+
 - `ffmpeg` and `ffprobe` installed on your system and accessible via the command line (e.g., `sudo apt install ffmpeg` or `brew install ffmpeg`).
-- `gcloud` CLI installed and configured.
+- `gcloud` CLI installed and configured (if using Vertex AI or Chirp 3).
 
 ## Setup
 
@@ -37,123 +65,101 @@ There is a huge benefit to having a transcript of your meetings, but we don't li
    ```
 
 4. **Authentication Modes:**
-   - **Local Workstation (ADC, Default):**
+   - **Gemini API Key (AI Studio, Zero-GCP):**
+     Set `GEMINI_API_KEY=your_key` in `.env`. Files are uploaded via the Gemini Files API and purged immediately after transcription.
+   - **Local Workstation (GCP ADC):**
      Authenticate via Application Default Credentials:
      ```bash
      gcloud auth application-default login
      ```
-     With `GCP_AUTH_MODE=adc` (default), the application uses your user ADC.
+     With `GCP_AUTH_MODE=adc`, the application uses your user ADC.
    - **Automated / Agent Deployments (Service Account Key):**
      For running on a VPS or autonomous agent platform (e.g., Hermes), configure `GCP_AUTH_MODE=service_account_key` with a dedicated, least-privilege service account key file.
-     
-     **Required Scopes & Permissions Summary:**
-     - **Project Level:** Minimal custom role containing `speech.recognizers.recognize`, `speech.operations.get`, and `serviceusage.services.use`.
-     - **Dedicated Bucket Level Only:** Custom role containing `storage.objects.create`, `storage.objects.get`, `storage.objects.list`, and `storage.objects.delete`.
-     - *No broad roles (`speech.admin`, `storage.admin`, or project-wide storage roles) should ever be granted.*
-     
-     See the [Hermes Deployment Guide](docs/hermes-deployment.md) for the complete administrator runbook, step-by-step `gcloud` provisioning commands, key rotation, and VPS setup.
+     See the [Hermes Deployment Guide](docs/hermes-deployment.md) for full provisioning commands.
    - **Validate Credentials & Permissions:**
-     You can verify your configuration and bucket permissions at any time without processing audio:
+     Verify your configuration at any time without processing audio:
      ```bash
      python -m src.main --check-auth
      ```
-   *Note: Ensure the **Cloud Speech-to-Text API** is enabled in your GCP project. Quota project attribution is managed programmatically via the `.env` configuration file.*
 
-5. **Provision your private GCS Bucket:**
-   Create a secure bucket in your chosen region (e.g., `eu`):
-   ```bash
-   gcloud storage buckets create gs://<your-bucket-name> --location=eu --uniform-bucket-level-access --public-access-prevention
-   ```
-
-6. **Configure environment variables:**
+5. **Configure environment variables:**
    Copy the example file and adjust as needed:
    ```bash
    cp .env.example .env
    ```
-   *Note: Ensure you update `GCP_PROJECT_ID` with your actual GCP project ID and `GCS_BUCKET_NAME` with your bucket name.*
-
-7. **Register Skill in Hermes / Agent Harness (Optional):**
-   If running on a VPS or host managed by a Hermes agent, register the skill so Hermes automatically recognizes and activates it:
-   ```bash
-   mkdir -p ~/.hermes/skills
-   ln -sf "$(pwd)/skills/gcp-audio-transcribe" ~/.hermes/skills/
-   ```
-   Once linked, Hermes indexes the skill definition and executes transcription workflows autonomously via `venv/bin/python -m src.main`.
 
    Key environment variables:
-   - `TRANSCRIPTION_MODEL` (Default: `chirp_3`): Google Cloud Speech-to-Text V2 model identifier. Defaults to `chirp_3`, with support for all GCP V2 models including `chirp_2`, `chirp`, `long`, `short`, and `telephony`.
-   - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted and monitored concurrently per wave.
-   - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` (Default: `2700` / 45 min): Maximum chunk duration ceiling for Dutch recordings.
-   - `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Maximum chunk duration ceiling for English recordings.
-   - `CHUNK_MIN_LENGTH_SECONDS` (Default: `600` / 10 min): Minimum chunk floor below which fixed GCP per-request overhead dominates.
-   - `CHUNK_SILENCE_SEARCH_WINDOW_SECONDS` (Default: `15`): Maximum search window in seconds to snap chunk cuts to natural pauses.
-   - `CHUNK_SILENCE_NOISE_THRESHOLD_DB` (Default: `-30`): Noise threshold in dB for FFmpeg `silencedetect`.
-   - `CHUNK_SILENCE_MIN_DURATION_SECONDS` (Default: `0.5`): Minimum pause duration in seconds to qualify as a cut point.
-   - `GCS_UPLOAD_TIMEOUT_SECONDS` (Default: `600`): Socket/upload timeout in seconds for GCS audio uploads.
-   - `TRANSCRIPTION_MAX_TIMEOUT_SECONDS` (Default: `1800`): Base maximum timeout cap; dynamically scales with total audio duration for long recordings.
-   - `TRANSCRIPTION_MAX_CHARS_PER_LINE` (Default: `120`): Target maximum line length for transcript post-processing.
-   - `TRANSCRIPTION_MAX_SENTENCES_PER_LINE` (Default: `3`): Target maximum sentences per line.
-   - `TRANSCRIPTION_CUSTOM_PROMPT` (Optional): Custom prompt instruction passed to Chirp 3 models via `CustomPromptConfig`.
+   - `TRANSCRIPTION_MODEL` (Default: `auto`): Model routing policy (`auto`, `gemini-3.5-transcribe`, or `chirp_3`).
+   - `GEMINI_API_KEY`: API key for Gemini AI Studio.
+   - `GEMINI_BACKEND` (Default: `auto`): Backend selection (`auto`, `api_key`, or `vertex`).
+   - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted concurrently per wave.
+   - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED` (Default: `1680` / 28 min): Safe diarization ceiling for Gemini.
+   - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` / `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Safe ceiling for Chirp 3.
+   - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN` (Default: `3480` / 58 min): Safe plain text ceiling for Gemini.
 
 ## Usage
 
 1. Place your input media file in a directory (e.g., `input/meeting.mp4`).
 
-2. Run the script via the CLI, specifying the input file and the language route:
+2. Run the script via the CLI:
    ```bash
-   python -m src.main input/meeting.mp4 --lang en-US
+   python -m src.main input/meeting.mp4 --lang nl-NL
    ```
 
-3. **Interactive Prompt:** If processing an English recording (which supports diarization), the script will prompt you for the number of speakers:
-   ```text
-   How many speakers were in this recording? (press Enter to auto-detect):
+3. **Interactive Mode (`-i` / `--interactive`):**
+   When running in a terminal, pass `-i` for interactive prompts on language, model, or trade-offs:
+   ```bash
+   python -m src.main input/meeting.mp4 -i
    ```
-   You can enter a number (e.g., `2`) or press Enter to let the Chirp 3 model auto-detect the speaker count.
 
-4. The pipeline will automatically upload the audio to your GCS bucket (`gs://<your-bucket-name>`), run the transcription via BatchRecognize, download the results, and clean up the GCS bucket.
+4. **CLI Flags:**
+   - `--model {auto,gemini-3.5-transcribe,chirp_3}`: Select or force a specific model.
+   - `--diarize` / `--no-diarize`: Force enable or disable speaker diarization.
+   - `--mode {verbatim,smart}`: Transcription formatting mode for Gemini plain audio.
+   - `--lang {nl-nl,en-us,en-gb,auto}`: Language code. `auto` is supported by Gemini.
+   - `--speakers <N>`: Optional speaker count hint.
+   - `--prepare-only`: Extract and prepare FLAC chunks without making API calls.
+   - `--from-gcs <prefix>`: Transcribe audio files already residing in GCS.
 
-5. **Output:** The final transcripts will be saved in the `transcripts/` directory as both a human-readable text file and a raw JSON API response.
-   Transcripts are automatically post-processed at sentence boundaries (`.`, `?`, `!`) to guarantee clean, line-bounded plain text (capped by default at 120 characters per line) for optimal compatibility with CLI tools, git diffs, and LLM contexts.
+5. **Agent-Friendly Non-Interactive Mode (Exit Code 2):**
+   In non-interactive environments (CI, autonomous agents), if a recording exceeds single-pass limits without explicit `--diarize`/`--no-diarize` flags, the automator exits with exit code `2` (`EXIT_DECISION_REQUIRED`) and emits a structured JSON block describing the options and exact CLI commands.
 
 ### Process Flow & Architecture
-
-The following diagram illustrates how the automator evaluates audio recordings, determines chunking strategies and speaker diarization, uploads media to Google Cloud, and formats output transcripts:
 
 ```mermaid
 flowchart TD
     A["Input Media File<br/>(.mp4, .m4a, .wav, .mov, etc.)"] --> B["Phase 1: Audio Extraction<br/>FFmpeg lossless extraction to FLAC"]
     B --> C["Measure Audio Duration &<br/>Detect Conversational Pauses"]
     
-    C --> D{"Language Route?"}
+    C --> D{"Duration?"}
     
-    %% Dutch Path
-    D -->|"Dutch (nl-NL)"| E["Dutch Sizing Strategy:<br/>Adaptive Parallel Wave"]
-    E --> F{"Duration <= 45 min?"}
-    F -->|"Yes (N=1)"| G["Monolithic Audio File<br/>(0 Chunk Boundaries)"]
-    F -->|"No (N > 1)"| H["Split into N Chunks (max 5)<br/>Snap cuts to pauses within ±15s"]
+    %% Short Path
+    D -->|"<= 28 min (1680s)"| E["Short Path (All Languages)<br/>Model: gemini-3.5-transcribe<br/>Diarization: Enabled<br/>Monolithic (0 chunk cuts)"]
     
-    %% English Path
-    D -->|"English (en-US / en-GB)"| I["English Sizing Strategy:<br/>Ceiling-Driven Minimization"]
-    I --> J{"Duration <= 45 min?"}
-    J -->|"Yes (N=1)"| K["Monolithic Audio File<br/>(0 Chunk Boundaries)"]
-    J -->|"No (N > 1)"| L["Maximize Chunk Length (up to 45 min)<br/>Snap cuts to pauses within ±15s"]
+    %% Medium Path
+    D -->|"28 to 45 min (1680s-2700s)"| F{"Language & Backend?"}
+    F -->|"English + GCS"| G["Auto-switch to chirp_3<br/>Diarization: Enabled<br/>Monolithic (0 chunk cuts)"]
+    F -->|"Dutch or API Key Only"| H{"Decision Required<br/>(Exit Code 2 or -i Prompt)"}
+    H -->|"Option 1"| I["gemini-3.5-transcribe --diarize<br/>(Split into <= 28m chunks)"]
+    H -->|"Option 2"| J["gemini-3.5-transcribe --no-diarize<br/>(Monolithic up to 58m)"]
+    H -->|"Option 3"| K["chirp_3 --no-diarize<br/>(Parallel wave chunks)"]
     
-    G --> M["Phase 2: Secure GCS Streaming<br/>2 MB Resumable Slices + Live Terminal Progress"]
-    H --> M
-    K --> N["Interactive Speaker Prompt<br/>(Auto-detect or User Input)"]
-    L --> N
-    N --> M
+    %% Long Path
+    D -->|"> 45 min (> 2700s)"| L{"Decision Required<br/>(Exit Code 2 or -i Prompt)"}
+    L -->|"Diarize"| M["Chunked Diarization<br/>gemini-3.5-transcribe (<=28m)<br/>or chirp_3 (<=45m)"]
+    L -->|"No Diarize"| N["Continuous Plain Text<br/>gemini-3.5-transcribe smart (<=58m)<br/>or chirp_3 fast parallel wave"]
     
-    M --> O["Phase 3: GCP Speech-to-Text V2<br/>Chirp 3 BatchRecognize in Bounded Waves"]
+    E --> O["Phase 2: Transcription Engine<br/>AI Studio (Files API) or GCP GCS / Speech V2"]
+    G --> O
+    I --> O
+    J --> O
+    K --> O
+    M --> O
+    N --> O
     
-    O --> P{"Diarization Enabled?"}
-    P -->|"No (Dutch)"| Q["Stitch Plain Transcripts<br/>Insert Chunk Headers if chunked"]
-    P -->|"Yes (English)"| R["Format Speaker Dialogue<br/>(Speaker 1, Speaker 2...)"]
+    O --> P["Phase 3: Post-Processing & Stitching<br/>• Diarized: Speaker 1, Speaker 2 formatting<br/>• Plain: Sentence-bounded wrapping (120 chars)<br/>• Smart: Preserves markdown lists & bullets"]
     
-    Q --> S["Phase 4: Post-Processing<br/>Wrap Lines at Sentence Boundaries (max 120 chars)"]
-    R --> S
-    
-    S --> T["Final Artifacts Saved in transcripts/<br/>• .txt: Clean, Line-Bounded Transcript<br/>• .json: Full GCP API Metadata"]
+    P --> Q["Final Artifacts Saved in transcripts/<br/>• .txt: Clean Transcript<br/>• .json: Full API Metadata"]
 ```
 
 #### Functional Step Breakdown

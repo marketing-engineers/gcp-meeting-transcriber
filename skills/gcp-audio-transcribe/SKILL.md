@@ -54,6 +54,16 @@ Extract audio and split into FLAC chunks without uploading to GCP or making clou
 venv/bin/python -m src.main input/recording.mp4 --lang nl-NL --prepare-only
 ```
 
+### 5. Handling Non-Interactive Routing Decisions (Exit Code 2)
+When processing audio recordings that exceed single-pass thresholds without explicit `--diarize` or `--no-diarize` flags:
+- The script will **not** hang on terminal input; it exits cleanly with exit code `2` (`EXIT_DECISION_REQUIRED`).
+- It outputs a structured JSON block to `stderr` containing the audio duration, why a decision is needed, and numbered options with exact commands.
+- **Agent Workflow when Exit Code 2 is Encountered:**
+  1. Parse the JSON block from `stderr`.
+  2. Present the choices clearly to the human user in chat (e.g., whether to keep speaker diarization with chunk boundaries or generate a continuous transcript without speaker labels).
+  3. Wait for the user's decision.
+  4. Re-invoke `venv/bin/python -m src.main` with the exact flags from the selected option (e.g., adding `--diarize` or `--no-diarize`).
+
 ## Output Delivery & Post-Processing Guidelines
 
 ### 1. Deliver as File Attachment (Required)
