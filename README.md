@@ -22,8 +22,8 @@ Transcripts are delivered as clean, ready-to-read Markdown files (`transcripts/<
 ---
 generated_at: "2026-11-08T16:48:00Z"
 source_file: "quarterly_review.mp4"
-duration: "45m 12s"
-duration_seconds: 2712.5
+duration: "18m 30s"
+duration_seconds: 1110.0
 repository: "marketing-engineers-gcp-audio-transcribe"
 settings:
   model: "gemini-3.5-transcribe"
@@ -32,14 +32,10 @@ settings:
   languages:
     - "en-US"
   diarization: true
-  speakers: "auto-detect"
+  speakers: 2
 ---
 
 # Transcript: quarterly_review.mp4
-
-## Part A (Chunk 1 of 2) (00:00 - 28:00)
-
-> ℹ️ **Speaker Attribution Scope:** This recording was split into 2 parts for processing. Speaker labels (e.g. `Speaker 1`, `Speaker 2`) are local to Part A and might not align with Part B, C, D, etc.
 
 Speaker 1: Good morning everyone, welcome to the quarterly business review. Today we will walk through our performance and key metrics from Q3.
 Speaker 2: Thanks. Let's start by looking at our revenue numbers and customer acquisition channels.
@@ -49,18 +45,17 @@ _**[05:00]**_
 Speaker 1: Looking at customer acquisition cost, we observed an eighteen percent reduction compared to the previous quarter.
 Speaker 2: That's right, primarily driven by strong organic search performance and our new partner referral program.
 
----
+_**[10:00]**_
 
-## Part B (Chunk 2 of 2) (28:00 - 45:12)
+Speaker 1: Next up is our product roadmap for the upcoming quarter, specifically our cloud data pipeline initiatives.
+Speaker 2: We have allocated dedicated engineering capacity to optimize our real-time streaming pipelines and AI models.
 
-> ⚠️ **Speaker Attribution Notice:** Speaker numbers in Chunk 2 (Part B) are local to this chunk and DO NOT correspond to speaker numbers in previous chunks (Part A). Speaker labels from Part A might not align with Part B, etc.
+_**[15:00]**_
 
-Speaker 1: That concludes our retrospective. Let's now move on to the second part of our agenda: resource allocation and technical roadmap for Q4.
-
-_**[30:00]**_
-
-Speaker 2: For next quarter, we recommend allocating dedicated cloud engineering capacity to optimize our real-time data pipelines and AI transcription workflows.
+Speaker 1: Excellent. Let's open the floor for any final questions before we wrap up today's session.
 ```
+
+*(Note: For long recordings split into multiple chunks, section headers like `## Part A (Chunk 1 of 2)` and `## Part B (Chunk 2 of 2)` are automatically included with a notice that speaker labels reset per chunk).*
 
 ---
 
@@ -142,7 +137,7 @@ Get started in 2 minutes with no GCP project or cloud bucket needed:
    cp .env.example .env
    ```
 
-   | Variable | Requirement | Default / Fallback | Description |
+   | Variable | Requirement | Default | Description |
    | :--- | :--- | :--- | :--- |
    | `GEMINI_API_KEY` | **Required** (for AI Studio) | None | Google AI Studio API key (used for zero-GCP setup). |
    | `GCP_PROJECT_ID` | **Required** (for GCP) | None | Google Cloud Project ID (for Vertex AI and Chirp 3). |
@@ -151,7 +146,7 @@ Get started in 2 minutes with no GCP project or cloud bucket needed:
    | `GCP_AUTH_MODE` | Optional | `adc` | GCP auth mode: `adc` (workstation login) or `service_account_key`. |
    | `TRANSCRIPTION_MODEL` | Optional | `auto` | Preferred model: `auto`, `gemini-3.5-transcribe`, or `chirp_3`. |
    | `GEMINI_BACKEND` | Optional | `auto` | Backend for Gemini: `auto`, `api_key` (AI Studio), or `vertex` (GCP). |
-   | `GCP_REGION` | Optional | `europe-west4` | GCP region for Speech V2 and Vertex AI endpoints. |
+   | `GCP_REGION` | Optional | `eu` | GCP region for Speech V2 and Vertex AI endpoints. |
    | `TRANSCRIPTION_CONCURRENCY` | Optional | `5` | Maximum audio chunks submitted concurrently in parallel waves. |
    | `TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS` | Optional | `300` (5 min) | Interval in seconds between transcript milestone markers (`0` disables). |
    | `CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED` | Optional | `1680` (28 min) | Maximum chunk duration ceiling for Gemini with speaker diarization. |
