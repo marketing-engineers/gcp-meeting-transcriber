@@ -77,6 +77,7 @@ CHUNK_MAX_LENGTH_SECONDS_DUTCH: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_DUTCH",
 CHUNK_MAX_LENGTH_SECONDS_ENGLISH: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_ENGLISH", 2700)
 CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED", 1680)
 CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN", 3480)
+CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART", 1200)
 CHUNK_MIN_LENGTH_SECONDS: int = _get_int("CHUNK_MIN_LENGTH_SECONDS", 600)
 CHUNK_SILENCE_SEARCH_WINDOW_SECONDS: float = _get_float("CHUNK_SILENCE_SEARCH_WINDOW_SECONDS", 15.0)
 CHUNK_SILENCE_NOISE_THRESHOLD_DB: int = _get_int("CHUNK_SILENCE_NOISE_THRESHOLD_DB", -30)
@@ -91,6 +92,34 @@ SUPPORTED_EXTENSIONS: list[str] = _get_csv_list("SUPPORTED_EXTENSIONS", ".mp4,.m
 LANGUAGE_CODES_DUTCH: list[str] = _get_csv_list("LANGUAGE_CODES_DUTCH", "nl-nl")
 LANGUAGE_CODES_ENGLISH: list[str] = _get_csv_list("LANGUAGE_CODES_ENGLISH", "en-us,en-gb")
 LANGUAGE_CODES_ALL: list[str] = LANGUAGE_CODES_DUTCH + LANGUAGE_CODES_ENGLISH
+
+# Primary European language prefixes where English (en-US) should be configured as a secondary language
+# for code-switching and loanwords ("leenwoorden")
+EUROPEAN_LANGUAGE_PREFIXES: list[str] = [
+    "nl", "de", "fr", "es", "it", "pt", "sv", "da", "no", "fi", "pl", "cs", "el", "ro", "hu"
+]
+
+
+def resolve_gemini_language_codes(lang: str | None) -> list[str] | None:
+    """
+    Resolves BCP-47 language codes for Gemini 3.5 Transcribe.
+    - If lang is None or 'auto', returns None (Gemini automatically detects language and code-switching).
+    - If lang is a European language (e.g., nl-NL, de-DE, fr-FR), includes the primary language
+      plus 'en-US' as a secondary language to preserve English loanwords and code-switching without word drops.
+    - Otherwise, returns [lang].
+    """
+    if not lang or lang.lower() == "auto":
+        return None
+
+    lang_clean = lang.strip()
+    prefix = lang_clean.lower().split("-")[0].split("_")[0]
+    if prefix in EUROPEAN_LANGUAGE_PREFIXES:
+        codes = [lang_clean]
+        if "en-us" not in [c.lower() for c in codes]:
+            codes.append("en-US")
+        return codes
+
+    return [lang_clean]
 
 # Directory Configuration
 OUTPUT_DIR: str = _get_str("OUTPUT_DIR", "output")

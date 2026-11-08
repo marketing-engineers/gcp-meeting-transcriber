@@ -150,11 +150,23 @@ def test_chunk_max_length_config_loaded():
         CHUNK_MAX_LENGTH_SECONDS_ENGLISH,
         CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED,
         CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+        CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART,
+        resolve_gemini_language_codes,
     )
     assert CHUNK_MAX_LENGTH_SECONDS_DUTCH == 2700
     assert CHUNK_MAX_LENGTH_SECONDS_ENGLISH == 2700
     assert CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED == 1680
     assert CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN == 3480
+    assert CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART == 1200
+
+    # Test resolve_gemini_language_codes
+    assert resolve_gemini_language_codes(None) is None
+    assert resolve_gemini_language_codes("auto") is None
+    assert resolve_gemini_language_codes("nl-NL") == ["nl-NL", "en-US"]
+    assert resolve_gemini_language_codes("de-DE") == ["de-DE", "en-US"]
+    assert resolve_gemini_language_codes("fr-FR") == ["fr-FR", "en-US"]
+    assert resolve_gemini_language_codes("en-US") == ["en-US"]
+    assert resolve_gemini_language_codes("ja-JP") == ["ja-JP"]
 
 
 def test_validate_backend_config_gemini_api_key():

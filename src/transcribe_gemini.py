@@ -18,6 +18,7 @@ from src.config import (
     GEMINI_API_KEY,
     TRANSCRIPTION_CONCURRENCY,
     TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+    resolve_gemini_language_codes,
 )
 from src.transcribe import format_ascii_matrix
 
@@ -125,8 +126,9 @@ def transcribe_gemini_file(
 
                     # Build generation_config for interactions.create
                     transcription_config: dict[str, Any] = {}
-                    if lang and lang.lower() != "auto":
-                        transcription_config["language_codes"] = [lang]
+                    gemini_lang_codes = resolve_gemini_language_codes(lang)
+                    if gemini_lang_codes:
+                        transcription_config["language_codes"] = gemini_lang_codes
 
                     if diarize:
                         transcription_config["mode"] = {
@@ -155,7 +157,7 @@ def transcribe_gemini_file(
 
                         audio_cfg = types.AudioTranscriptionConfig(
                             diarization=diarize,
-                            language_codes=[lang] if (lang and lang.lower() != "auto") else None,
+                            language_codes=gemini_lang_codes,
                             mode="SMART" if (not diarize and mode == "smart") else "VERBATIM",
                         )
                         response = client.models.generate_content(
@@ -183,9 +185,10 @@ def transcribe_gemini_file(
                     )
 
                 part = types.Part.from_uri(file_uri=audio_path_or_uri, mime_type="audio/flac")
+                gemini_lang_codes = resolve_gemini_language_codes(lang)
                 audio_cfg = types.AudioTranscriptionConfig(
                     diarization=diarize,
-                    language_codes=[lang] if (lang and lang.lower() != "auto") else None,
+                    language_codes=gemini_lang_codes,
                     mode="SMART" if (not diarize and mode == "smart") else "VERBATIM",
                 )
                 response = client.models.generate_content(
