@@ -133,24 +133,24 @@ def generate_frontmatter(
     if generated_at is None:
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    lines = ["---", f'generated_at: "{generated_at}"']
+    lines = ["---", f"generated_at: {json.dumps(generated_at)}"]
     if source_file:
-        lines.append(f'source_file: "{os.path.basename(source_file)}"')
+        lines.append(f"source_file: {json.dumps(os.path.basename(source_file))}")
     if duration is not None:
-        lines.append(f'duration: "{format_duration_human(duration)}"')
+        lines.append(f"duration: {json.dumps(format_duration_human(duration))}")
         lines.append(f"duration_seconds: {round(duration, 2)}")
-    lines.append(f'repository: "{repository}"')
+    lines.append(f"repository: {json.dumps(repository)}")
     lines.append("settings:")
     if model:
-        lines.append(f'  model: "{model}"')
+        lines.append(f"  model: {json.dumps(model)}")
     if mode and model != "chirp_3":
-        lines.append(f'  mode: "{mode}"')
+        lines.append(f"  mode: {json.dumps(mode)}")
     if lang:
-        lines.append(f'  language: "{lang}"')
+        lines.append(f"  language: {json.dumps(lang)}")
     if languages:
         lines.append("  languages:")
         for l in languages:
-            lines.append(f'    - "{l}"')
+            lines.append(f"    - {json.dumps(l)}")
     if diarize is not None:
         lines.append(f"  diarization: {'true' if diarize else 'false'}")
     if diarize:
@@ -158,14 +158,14 @@ def generate_frontmatter(
             if isinstance(speakers, int):
                 lines.append(f"  speakers: {speakers}")
             else:
-                lines.append(f'  speakers: "{speakers}"')
+                lines.append(f"  speakers: {json.dumps(str(speakers))}")
         else:
             lines.append('  speakers: "auto-detect"')
     elif speakers is not None:
         if isinstance(speakers, int):
             lines.append(f"  speakers: {speakers}")
         else:
-            lines.append(f'  speakers: "{speakers}"')
+            lines.append(f"  speakers: {json.dumps(str(speakers))}")
 
     if extra_settings:
         for k, v in extra_settings.items():
@@ -176,9 +176,9 @@ def generate_frontmatter(
             elif isinstance(v, list):
                 lines.append(f"  {k}:")
                 for item in v:
-                    lines.append(f'    - "{item}"')
+                    lines.append(f"    - {json.dumps(str(item))}")
             else:
-                lines.append(f'  {k}: "{v}"')
+                lines.append(f"  {k}: {json.dumps(str(v))}")
 
     lines.append("---")
     return "\n".join(lines)
@@ -292,7 +292,7 @@ def _render_turns_with_milestones(
     milestone_step = float(milestone_interval) if milestone_interval > 0 else 0.0
     next_milestone = None
     if milestone_step > 0:
-        first_ms = math.ceil((time_offset + 0.001) / milestone_step) * milestone_step
+        first_ms = math.ceil(time_offset / milestone_step) * milestone_step
         next_milestone = first_ms if first_ms > 0 else milestone_step
 
     lines: list[str] = []
@@ -497,7 +497,7 @@ def format_plain_transcript(
     raw_text = " ".join(segments)
 
     # If duration and milestone interval are active, render with milestones
-    if milestone_interval > 0 and duration and duration >= milestone_interval:
+    if milestone_interval > 0 and duration and duration > 0:
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', raw_text.strip()) if s.strip()]
         sentence_turns = [(None, [s], None) for s in sentences]
         return _render_turns_with_milestones(
@@ -618,6 +618,7 @@ def format_smart_transcript(
     for line in raw_blocks:
         stripped = line.strip()
         if not stripped:
+            formatted_blocks.append(("", 0))
             continue
 
         list_match = re.match(r"^([*+-]|\d+\.)\s+(.*)$", stripped)
@@ -652,7 +653,7 @@ def format_smart_transcript(
     milestone_step = float(milestone_interval) if milestone_interval > 0 else 0.0
     next_milestone = None
     if milestone_step > 0 and duration and duration > 0:
-        first_ms = math.ceil((time_offset + 0.001) / milestone_step) * milestone_step
+        first_ms = math.ceil(time_offset / milestone_step) * milestone_step
         next_milestone = first_ms if first_ms > 0 else milestone_step
 
     total_words = sum(w_count for _, w_count in formatted_blocks)
@@ -660,6 +661,10 @@ def format_smart_transcript(
     cursor_words = 0
 
     for block_text, w_count in formatted_blocks:
+        if not block_text:
+            result_lines.append("")
+            continue
+
         if milestone_step > 0 and next_milestone is not None and total_words > 0 and duration:
             t = (cursor_words / total_words) * duration
             global_t = time_offset + t

@@ -283,6 +283,15 @@ class TestFrontmatterAndFormatting:
         assert "diarization: true" in fm
         assert "speakers: 3" in fm
 
+    def test_generate_frontmatter_escapes_quotes(self):
+        """Filenames with quotes or special characters are safely escaped for YAML."""
+        fm = generate_frontmatter(
+            source_file='Meeting "Q3 Strategy" & Review.mp4',
+            lang="en-US",
+            generated_at="2026-11-08T12:00:00Z",
+        )
+        assert r'source_file: "Meeting \"Q3 Strategy\" & Review.mp4"' in fm
+
     def test_generate_frontmatter_defaults(self):
         fm = generate_frontmatter(
             lang="en-US",
@@ -322,6 +331,33 @@ class TestMilestoneTimestamps:
         )
         assert "_**[05:00]**_" in formatted
 
+    def test_plain_milestones_short_chunk_crossing_cumulative_milestone(self):
+        """Short remainder chunk crossing a milestone on cumulative timeline receives milestone."""
+        text = "Short wrap up segment of the discussion."
+        r = _make_result(transcript=text)
+
+        # Chunk is only 100s (< 300s), but starts at 250s, so crosses 300s milestone
+        formatted = format_plain_transcript(
+            [r],
+            time_offset=250.0,
+            duration=100.0,
+            milestone_interval=300.0,
+        )
+        assert "_**[05:00]**_" in formatted
+
+    def test_milestone_on_exact_boundary(self):
+        """A chunk starting on an exact milestone multiple (e.g. 300s) does not skip it."""
+        words = [_make_word(f"w{i}", "1") for i in range(20)]
+        r = _make_result(words=words)
+
+        formatted = format_diarized_transcript(
+            [r],
+            time_offset=300.0,
+            duration=300.0,
+            milestone_interval=300.0,
+        )
+        assert "_**[05:00]**_" in formatted
+
     def test_smart_milestones_every_5_minutes(self):
         """Smart transcript with bullet points receives milestone indicator."""
         lines = [f"* Action item {i}: follow up with team" for i in range(20)]
@@ -333,6 +369,13 @@ class TestMilestoneTimestamps:
             milestone_interval=300.0,
         )
         assert "_**[05:00]**_" in formatted
+
+    def test_smart_transcript_preserves_paragraph_blank_lines(self):
+        """Smart transcript preserves blank lines separating paragraphs."""
+        input_text = "# Header\n\nFirst paragraph content.\n\nSecond paragraph content.\n\n* Bullet 1\n* Bullet 2"
+        formatted = format_smart_transcript(input_text, duration=100.0, milestone_interval=0.0)
+        assert "\n\nFirst paragraph content.\n\n" in formatted
+        assert "\n\nSecond paragraph content.\n\n" in formatted
 
     def test_custom_milestone_interval(self):
         """Configurable milestone interval (e.g. 60 seconds)."""
