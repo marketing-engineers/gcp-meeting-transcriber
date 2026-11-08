@@ -11,6 +11,7 @@ from src.config import (
     CHUNK_MAX_LENGTH_SECONDS_ENGLISH,
     CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED,
     CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+    CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART,
     CHUNK_MIN_LENGTH_SECONDS,
     CHUNK_SILENCE_MIN_DURATION_SECONDS,
     CHUNK_SILENCE_NOISE_THRESHOLD_DB,
@@ -61,6 +62,14 @@ EXIT_DECISION_REQUIRED = 2
 GEMINI_DIARIZATION_MAX_SECONDS = CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED  # 1680s (28 min)
 CHIRP_MAX_SECONDS = CHUNK_MAX_LENGTH_SECONDS_ENGLISH  # 2700s (45 min)
 GEMINI_PLAIN_MAX_SECONDS = CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN  # 3480s (58 min)
+GEMINI_SMART_MAX_SECONDS = CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART  # 1200s (20 min)
+
+
+def _get_gemini_plain_chunk_limit(mode: str) -> int:
+    """Returns safe chunk length for non-diarized Gemini transcription depending on mode."""
+    if mode == "smart":
+        return CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART
+    return CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN
 
 
 class TranscriptionPlan:
@@ -254,7 +263,7 @@ def resolve_transcription_plan(
                 model="gemini-3.5-transcribe",
                 diarize=False,
                 mode=mode,
-                max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+                max_chunk_length=_get_gemini_plain_chunk_limit(mode),
                 target_parallelism=None,
             )
         else:
@@ -288,14 +297,14 @@ def resolve_transcription_plan(
                     },
                     {
                         "title": "Disable Diarization",
-                        "description": f"Transcribe in up to 58m chunks without speaker labels (mode: {mode}).",
+                        "description": f"Transcribe without speaker labels (mode: {mode}, chunks up to {int(_get_gemini_plain_chunk_limit(mode) // 60)}m).",
                         "flags": f"--model gemini-3.5-transcribe --no-diarize --mode {mode}",
                         "tradeoffs": "Continuous text without speaker attribution labels.",
                         "plan": TranscriptionPlan(
                             model="gemini-3.5-transcribe",
                             diarize=False,
                             mode=mode,
-                            max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+                            max_chunk_length=_get_gemini_plain_chunk_limit(mode),
                             target_parallelism=None,
                         ),
                     },
@@ -311,7 +320,7 @@ def resolve_transcription_plan(
                 model="gemini-3.5-transcribe",
                 diarize=diarize,
                 mode=mode if not diarize else "verbatim",
-                max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED if diarize else CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+                max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED if diarize else _get_gemini_plain_chunk_limit(mode),
                 target_parallelism=None,
             )
         else:
@@ -335,7 +344,7 @@ def resolve_transcription_plan(
                         model=model,
                         diarize=False,
                         mode=mode,
-                        max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN if model == "gemini-3.5-transcribe" else CHUNK_MAX_LENGTH_SECONDS_DUTCH,
+                        max_chunk_length=_get_gemini_plain_chunk_limit(mode) if model == "gemini-3.5-transcribe" else CHUNK_MAX_LENGTH_SECONDS_DUTCH,
                         target_parallelism=None if model == "gemini-3.5-transcribe" else TRANSCRIPTION_CONCURRENCY,
                     )
                 else:
@@ -367,7 +376,7 @@ def resolve_transcription_plan(
                         model="gemini-3.5-transcribe",
                         diarize=False,
                         mode=mode,
-                        max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+                        max_chunk_length=_get_gemini_plain_chunk_limit(mode),
                         target_parallelism=None,
                     )
                 else:
@@ -375,6 +384,7 @@ def resolve_transcription_plan(
                         f"Recording is {int(duration // 60)}m{int(duration % 60):02d}s, exceeding the 28m single-chunk "
                         "diarization limit for gemini-3.5-transcribe, and GCP/GCS is not configured for chirp_3 monolithic transcription."
                     )
+                    effective_plain_mode = mode if mode != "verbatim" else "verbatim"
                     options = [
                         {
                             "title": "Chunked Diarization (Gemini 3.5 Transcribe)",
@@ -390,17 +400,17 @@ def resolve_transcription_plan(
                             ),
                         },
                         {
-                            "title": "Plain Monolithic Transcription (Gemini 3.5 Transcribe)",
-                            "description": "Single monolithic request without speaker diarization.",
-                            "flags": "--model gemini-3.5-transcribe --no-diarize --mode smart",
-                            "tradeoffs": "No speaker attribution labels, but produces a continuous transcript without chunk cuts.",
-                            "plan": TranscriptionPlan(
-                                model="gemini-3.5-transcribe",
-                                diarize=False,
-                                mode=mode if mode != "verbatim" else "smart",
-                                max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
-                                target_parallelism=None,
-                            ),
+                        "title": "Plain Transcription (Gemini 3.5 Transcribe)",
+                        "description": f"Transcription without speaker diarization (mode: {effective_plain_mode}, chunks up to {int(_get_gemini_plain_chunk_limit(effective_plain_mode) // 60)}m).",
+                        "flags": f"--model gemini-3.5-transcribe --no-diarize --mode {effective_plain_mode}",
+                        "tradeoffs": "No speaker attribution labels, but produces continuous transcript.",
+                        "plan": TranscriptionPlan(
+                            model="gemini-3.5-transcribe",
+                            diarize=False,
+                            mode=effective_plain_mode,
+                            max_chunk_length=_get_gemini_plain_chunk_limit(effective_plain_mode),
+                            target_parallelism=None,
+                        ),
                         },
                     ]
                     return _handle_decision(input_file, lang, duration, reason, options, interactive)
@@ -420,7 +430,7 @@ def resolve_transcription_plan(
                     model=model,
                     diarize=False,
                     mode=mode,
-                    max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN if model == "gemini-3.5-transcribe" else CHUNK_MAX_LENGTH_SECONDS_DUTCH,
+                    max_chunk_length=_get_gemini_plain_chunk_limit(mode) if model == "gemini-3.5-transcribe" else CHUNK_MAX_LENGTH_SECONDS_DUTCH,
                     target_parallelism=None if model == "gemini-3.5-transcribe" else TRANSCRIPTION_CONCURRENCY,
                 )
             else:
@@ -428,6 +438,7 @@ def resolve_transcription_plan(
                     f"Recording is {int(duration // 60)}m{int(duration % 60):02d}s. Chirp 3 does not support Dutch diarization, "
                     "and gemini-3.5-transcribe cannot diarize recordings over 28m in a single pass."
                 )
+                effective_plain_mode = mode if mode != "verbatim" else "verbatim"
                 options = [
                     {
                         "title": "Chunked Diarization (Gemini 3.5 Transcribe)",
@@ -443,15 +454,15 @@ def resolve_transcription_plan(
                         ),
                     },
                     {
-                        "title": "Plain Monolithic (Gemini 3.5 Transcribe)",
-                        "description": "Single monolithic pass without diarization (up to 58 min).",
-                        "flags": "--model gemini-3.5-transcribe --no-diarize --mode smart",
-                        "tradeoffs": "No speaker attribution, but continuous without boundaries.",
+                        "title": "Plain Transcription (Gemini 3.5 Transcribe)",
+                        "description": f"Transcription without diarization (mode: {effective_plain_mode}, chunks up to {int(_get_gemini_plain_chunk_limit(effective_plain_mode) // 60)}m).",
+                        "flags": f"--model gemini-3.5-transcribe --no-diarize --mode {effective_plain_mode}",
+                        "tradeoffs": "No speaker attribution, but produces continuous transcript.",
                         "plan": TranscriptionPlan(
                             model="gemini-3.5-transcribe",
                             diarize=False,
-                            mode=mode if mode != "verbatim" else "smart",
-                            max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+                            mode=effective_plain_mode,
+                            max_chunk_length=_get_gemini_plain_chunk_limit(effective_plain_mode),
                             target_parallelism=None,
                         ),
                     },
@@ -502,7 +513,7 @@ def resolve_transcription_plan(
                 model="gemini-3.5-transcribe",
                 diarize=False,
                 mode=mode,
-                max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+                max_chunk_length=_get_gemini_plain_chunk_limit(mode),
                 target_parallelism=None,
             )
     else:
@@ -541,15 +552,28 @@ def resolve_transcription_plan(
                 ),
             })
         options.append({
+            "title": "Disable Diarization via Gemini 3.5 Transcribe (Verbatim Plain)",
+            "description": "Chunk into <= 58 min parts without diarization, preserving word-for-word transcript without omissions.",
+            "flags": "--model gemini-3.5-transcribe --no-diarize --mode verbatim",
+            "tradeoffs": "No speaker attribution labels, but guarantees completeness across long recordings.",
+            "plan": TranscriptionPlan(
+                model="gemini-3.5-transcribe",
+                diarize=False,
+                mode="verbatim",
+                max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+                target_parallelism=None,
+            ),
+        })
+        options.append({
             "title": "Disable Diarization via Gemini 3.5 Transcribe (Smart Mode)",
-            "description": "Chunk into <= 58 min parts without diarization, with intelligent formatting.",
+            "description": "Chunk into safe <= 20 min parts without diarization, with intelligent formatting and disfluency cleanup.",
             "flags": "--model gemini-3.5-transcribe --no-diarize --mode smart",
-            "tradeoffs": "No speaker attribution labels, but cleaner flowing prose.",
+            "tradeoffs": "No speaker attribution labels; chunked at <= 20m to prevent mid-context compression/skipping.",
             "plan": TranscriptionPlan(
                 model="gemini-3.5-transcribe",
                 diarize=False,
                 mode="smart",
-                max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+                max_chunk_length=CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART,
                 target_parallelism=None,
             ),
         })
@@ -1055,10 +1079,22 @@ def main() -> None:
         if args.interactive:
             while True:
                 try:
-                    prompted_lang = input(f"Select language ({', '.join(LANGUAGE_CODES_ALL)}, auto): ").strip().lower()
+                    prompted_lang = input(f"Select language ({', '.join(LANGUAGE_CODES_ALL)}, auto) [default: auto]: ").strip().lower()
                 except (EOFError, KeyboardInterrupt):
                     print()
                     sys.exit(1)
+                if not prompted_lang:
+                    # Default to 'auto' after explicit confirmation
+                    try:
+                        confirm = input("No language selected. Default to automatic language detection ('auto')? [Y/n]: ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        print()
+                        sys.exit(1)
+                    if confirm in ("", "y", "yes"):
+                        args.lang = "auto"
+                        logger.info("Language defaulted to 'auto' (automatic detection enabled).")
+                        break
+                    continue
                 if prompted_lang in [c.lower() for c in LANGUAGE_CODES_ALL] or prompted_lang == "auto":
                     args.lang = prompted_lang
                     break
