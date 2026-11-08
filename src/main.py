@@ -484,7 +484,7 @@ def resolve_transcription_plan(
 
     # Case 2C: Long Recordings (> 2700s / > 45 min)
     if requested_diarize is True:
-        if is_dutch or not has_chirp:
+        if not is_english or not has_chirp:
             return TranscriptionPlan(
                 model="gemini-3.5-transcribe",
                 diarize=True,
@@ -961,24 +961,35 @@ def process_file(
     extract_audio_to_flac(input_path, final_output)
     duration = get_audio_duration(final_output)
 
-    plan = resolve_transcription_plan(
-        duration=duration,
-        lang=lang,
-        requested_model=model,
-        requested_diarize=diarize,
-        mode=mode,
-        speaker_count=speaker_count,
-        interactive=interactive,
-        input_file=input_path,
-    )
-
-    if plan.model == "chirp_3" and plan.diarize and plan.speaker_count is None and interactive:
-        plan.speaker_count = _prompt_speaker_count()
-    elif plan.model == "gemini-3.5-transcribe" and plan.diarize and plan.speaker_count and plan.speaker_count > 2:
-        logger.warning(
-            "Gemini 3.5 Transcribe speaker attribution for 3+ speakers is experimental (requested: %d).",
-            plan.speaker_count,
+    try:
+        plan = resolve_transcription_plan(
+            duration=duration,
+            lang=lang,
+            requested_model=model,
+            requested_diarize=diarize,
+            mode=mode,
+            speaker_count=speaker_count,
+            interactive=interactive,
+            input_file=input_path,
         )
+
+        if plan.model == "chirp_3" and plan.diarize and plan.speaker_count is None and interactive:
+            plan.speaker_count = _prompt_speaker_count()
+        elif plan.model == "gemini-3.5-transcribe" and plan.diarize and plan.speaker_count and plan.speaker_count > 2:
+            logger.warning(
+                "Gemini 3.5 Transcribe speaker attribution for 3+ speakers is experimental (requested: %d).",
+                plan.speaker_count,
+            )
+    except SystemExit:
+        # If resolving the plan exits (e.g. exit code 2 when a trade-off decision is required),
+        # clean up the extracted FLAC so temporary files are not left orphaned on disk.
+        if os.path.exists(final_output):
+            try:
+                os.remove(final_output)
+                logger.info("Cleaned up temporary FLAC on exit: %s", final_output)
+            except OSError as e:
+                logger.warning("Failed to remove temporary FLAC on exit %s: %s", final_output, e)
+        raise
 
     execute_transcription_plan(
         input_path=input_path,

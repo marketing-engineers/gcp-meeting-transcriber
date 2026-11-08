@@ -250,19 +250,37 @@ class TestProcessFileRouting:
         mock_stitch.assert_called_once()
 
     @patch("src.main.os.path.exists", return_value=True)
+    @patch("src.main.os.remove")
     @patch("src.main.validate_extension", return_value=True)
     @patch("src.main.validate_backend_config")
     @patch("src.main.extract_audio_to_flac")
     @patch("src.main.get_audio_duration", return_value=4500.0)
     def test_long_recording_decision_required_non_interactive(
-        self, mock_duration, mock_extract, mock_val, mock_ext, mock_exists
+        self, mock_duration, mock_extract, mock_val, mock_ext, mock_remove, mock_exists
     ):
-        """Long recording (> 45m) without --diarize/--no-diarize exits with code 2 in non-interactive mode."""
+        """Long recording (> 45m) without --diarize/--no-diarize exits with code 2 in non-interactive mode and cleans up FLAC."""
         with patch("src.main._has_gemini_backend", return_value=True), \
              patch("src.main._has_chirp_backend", return_value=True):
             with pytest.raises(SystemExit) as exc_info:
                 process_file("input.mp4", "nl-nl", prepare_only=False, interactive=False)
             assert exc_info.value.code == EXIT_DECISION_REQUIRED
+            mock_remove.assert_called_once()
+
+    def test_long_recording_auto_lang_with_diarize_routes_to_gemini(self):
+        """Long recording with --lang auto and --diarize routes to gemini-3.5-transcribe, not chirp_3."""
+        with patch("src.main._has_gemini_backend", return_value=True), \
+             patch("src.main._has_chirp_backend", return_value=True):
+            plan = resolve_transcription_plan(
+                duration=3000.0,
+                lang="auto",
+                requested_model="auto",
+                requested_diarize=True,
+                mode="verbatim",
+                speaker_count=None,
+                interactive=False,
+            )
+            assert plan.model == "gemini-3.5-transcribe"
+            assert plan.diarize is True
 
     @patch("src.main.os.path.exists", return_value=True)
     @patch("src.main.validate_extension", return_value=True)
