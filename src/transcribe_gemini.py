@@ -108,38 +108,38 @@ def transcribe_gemini_file(
 
     is_gcs = audio_path_or_uri.startswith("gs://")
 
-    for attempt in range(max_retries + 1):
+    if effective_backend == "api_key":
+        if is_gcs:
+            raise ProcessingError(
+                f"Cannot transcribe GCS URI directly with Gemini AI Studio (api_key mode): {audio_path_or_uri}. "
+                "GCS URIs require Vertex AI backend mode or a local audio file."
+            )
+        if not os.path.exists(audio_path_or_uri):
+            raise ProcessingError(f"Audio file not found for Gemini transcription: {audio_path_or_uri}")
+
+        uploaded_file = None
         try:
-            if effective_backend == "api_key":
-                if is_gcs:
-                    raise ProcessingError(
-                        f"Cannot transcribe GCS URI directly with Gemini AI Studio (api_key mode): {audio_path_or_uri}. "
-                        "GCS URIs require Vertex AI backend mode or a local audio file."
-                    )
-                if not os.path.exists(audio_path_or_uri):
-                    raise ProcessingError(f"Audio file not found for Gemini transcription: {audio_path_or_uri}")
+            logger.info("Uploading audio chunk to Gemini Files API: %s", audio_path_or_uri)
+            uploaded_file = client.files.upload(file=audio_path_or_uri)
 
-                uploaded_file = None
+            # Build generation_config for interactions.create
+            transcription_config: dict[str, Any] = {}
+            gemini_lang_codes = resolve_gemini_language_codes(lang)
+            if gemini_lang_codes:
+                transcription_config["language_codes"] = gemini_lang_codes
+
+            if diarize:
+                transcription_config["mode"] = {
+                    "type": "verbatim",
+                    "diarization_mode": "speaker",
+                }
+            elif mode == "smart":
+                transcription_config["mode"] = "smart"
+            else:
+                transcription_config["mode"] = {"type": "verbatim"}
+
+            for attempt in range(max_retries + 1):
                 try:
-                    logger.info("Uploading audio chunk to Gemini Files API: %s", audio_path_or_uri)
-                    uploaded_file = client.files.upload(file=audio_path_or_uri)
-
-                    # Build generation_config for interactions.create
-                    transcription_config: dict[str, Any] = {}
-                    gemini_lang_codes = resolve_gemini_language_codes(lang)
-                    if gemini_lang_codes:
-                        transcription_config["language_codes"] = gemini_lang_codes
-
-                    if diarize:
-                        transcription_config["mode"] = {
-                            "type": "verbatim",
-                            "diarization_mode": "speaker",
-                        }
-                    elif mode == "smart":
-                        transcription_config["mode"] = "smart"
-                    else:
-                        transcription_config["mode"] = {"type": "verbatim"}
-
                     try:
                         response = client.interactions.create(
                             model="gemini-3.5-transcribe",
@@ -166,64 +166,86 @@ def transcribe_gemini_file(
                             config=types.GenerateContentConfig(audio_transcription_config=audio_cfg),
                         )
                         return response
-                finally:
-                    if uploaded_file is not None:
-                        try:
-                            client.files.delete(name=uploaded_file.name)
-                            logger.debug("Deleted temporary Gemini file: %s", uploaded_file.name)
-                        except Exception as del_err:
-                            logger.warning(
-                                "Failed to delete temporary Gemini file %s: %s",
-                                uploaded_file.name,
-                                del_err,
-                            )
-
-            else:  # effective_backend == "vertex"
-                if not is_gcs:
+                except Exception as e:
+                    if _is_rate_limit_error(e) and attempt < max_retries:
+                        delay = (2 ** attempt) + random.uniform(0.5, 1.5)
+                        logger.warning(
+                            "Gemini API rate limit (429) encountered on attempt %d/%d for %s. Backing off for %.1fs...",
+                            attempt + 1, max_retries, audio_path_or_uri, delay,
+                        )
+                        time.sleep(delay)
+                        continue
+                    if isinstance(e, ProcessingError):
+                        raise
                     raise ProcessingError(
-                        f"Vertex AI transcription expects a GCS URI (gs://...), got: {audio_path_or_uri}"
+                        f"Gemini transcription failed for {audio_path_or_uri}.\nOriginal error: {e}"
+                    ) from e
+
+            raise ProcessingError(f"Gemini transcription exceeded {max_retries} retries for {audio_path_or_uri}")
+        finally:
+            if uploaded_file is not None:
+                try:
+                    client.files.delete(name=uploaded_file.name)
+                    logger.debug("Deleted temporary Gemini file: %s", uploaded_file.name)
+                except Exception as del_err:
+                    logger.warning(
+                        "Failed to delete temporary Gemini file %s: %s",
+                        uploaded_file.name,
+                        del_err,
                     )
 
-                part = types.Part.from_uri(file_uri=audio_path_or_uri, mime_type="audio/flac")
-                gemini_lang_codes = resolve_gemini_language_codes(lang)
-                audio_cfg = types.AudioTranscriptionConfig(
-                    diarization=diarize,
-                    language_codes=gemini_lang_codes,
-                    mode="SMART" if (not diarize and mode == "smart") else "VERBATIM",
-                )
+    else:  # effective_backend == "vertex"
+        if not is_gcs:
+            raise ProcessingError(
+                f"Vertex AI transcription expects a GCS URI (gs://...), got: {audio_path_or_uri}"
+            )
+
+        part = types.Part.from_uri(file_uri=audio_path_or_uri, mime_type="audio/flac")
+        gemini_lang_codes = resolve_gemini_language_codes(lang)
+        audio_cfg = types.AudioTranscriptionConfig(
+            diarization=diarize,
+            language_codes=gemini_lang_codes,
+            mode="SMART" if (not diarize and mode == "smart") else "VERBATIM",
+        )
+
+        for attempt in range(max_retries + 1):
+            try:
                 response = client.models.generate_content(
                     model="gemini-3.5-transcribe",
                     contents=[part],
                     config=types.GenerateContentConfig(audio_transcription_config=audio_cfg),
                 )
                 return response
-
-        except Exception as e:
-            if _is_rate_limit_error(e) and attempt < max_retries:
-                delay = (2 ** attempt) + random.uniform(0.5, 1.5)
-                logger.warning(
-                    "Gemini API rate limit (429) encountered on attempt %d/%d for %s. Backing off for %.1fs...",
-                    attempt + 1, max_retries, audio_path_or_uri, delay,
-                )
-                time.sleep(delay)
-                continue
-            if isinstance(e, ProcessingError):
-                raise
-            err_str = str(e)
-            if "aiplatform.googleapis.com" in err_str or ("403" in err_str and "PERMISSION_DENIED" in err_str):
+            except Exception as e:
+                if _is_rate_limit_error(e) and attempt < max_retries:
+                    delay = (2 ** attempt) + random.uniform(0.5, 1.5)
+                    logger.warning(
+                        "Gemini API rate limit (429) encountered on attempt %d/%d for %s. Backing off for %.1fs...",
+                        attempt + 1, max_retries, audio_path_or_uri, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                if isinstance(e, ProcessingError):
+                    raise
+                err_str = str(e)
+                if (
+                    "SERVICE_DISABLED" in err_str
+                    or ("403" in err_str and "has not been used" in err_str)
+                    or ("403" in err_str and "PERMISSION_DENIED" in err_str)
+                ):
+                    raise ProcessingError(
+                        f"Gemini Vertex AI transcription failed: {e}\n\n"
+                        "Remediation Guidance:\n"
+                        f"1. Enable the Vertex AI API on project '{GCP_PROJECT_ID}':\n"
+                        f"   gcloud services enable aiplatform.googleapis.com --project={GCP_PROJECT_ID}\n"
+                        "2. Ensure your service account has 'aiplatform.endpoints.predict' (or role 'roles/aiplatform.user').\n"
+                        "3. Alternatively, switch to Google AI Studio by setting GEMINI_API_KEY in .env and GEMINI_BACKEND=api_key."
+                    ) from e
                 raise ProcessingError(
-                    f"Gemini Vertex AI transcription failed: {e}\n\n"
-                    "Remediation Guidance:\n"
-                    f"1. Enable the Vertex AI API on project '{GCP_PROJECT_ID}':\n"
-                    f"   gcloud services enable aiplatform.googleapis.com --project={GCP_PROJECT_ID}\n"
-                    "2. Ensure your service account has 'aiplatform.endpoints.predict' (or role 'roles/aiplatform.user').\n"
-                    "3. Alternatively, switch to Google AI Studio by setting GEMINI_API_KEY in .env and GEMINI_BACKEND=api_key."
+                    f"Gemini transcription failed for {audio_path_or_uri}.\nOriginal error: {e}"
                 ) from e
-            raise ProcessingError(
-                f"Gemini transcription failed for {audio_path_or_uri}.\nOriginal error: {e}"
-            ) from e
 
-    raise ProcessingError(f"Gemini transcription exceeded {max_retries} retries for {audio_path_or_uri}")
+        raise ProcessingError(f"Gemini transcription exceeded {max_retries} retries for {audio_path_or_uri}")
 
 
 def transcribe_gemini_files(

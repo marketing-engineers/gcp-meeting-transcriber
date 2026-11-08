@@ -178,6 +178,39 @@ class TestTranscribeGeminiFile:
         mock_client.files.delete.assert_called_once_with(name="files/test123")
 
     @patch("os.path.exists", return_value=True)
+    @patch("time.sleep")
+    def test_api_key_upload_once_across_429_retries(self, mock_sleep, mock_exists):
+        """Verifies that client.files.upload is called only once even when 429 retries occur."""
+        mock_client = MagicMock()
+        mock_uploaded = MagicMock()
+        mock_uploaded.name = "files/retry123"
+        mock_client.files.upload.return_value = mock_uploaded
+
+        mock_resp = MagicMock()
+        mock_resp.output_text = "Success on retry"
+        # First call raises 429, second call succeeds
+        mock_client.interactions.create.side_effect = [
+            Exception("429 RESOURCE_EXHAUSTED: Rate limit exceeded"),
+            mock_resp,
+        ]
+
+        res = transcribe_gemini_file(
+            audio_path_or_uri="/tmp/test.flac",
+            lang="en-US",
+            diarize=True,
+            mode="verbatim",
+            backend="api_key",
+            client=mock_client,
+            max_retries=2,
+        )
+
+        assert res is mock_resp
+        mock_client.files.upload.assert_called_once_with(file="/tmp/test.flac")
+        assert mock_client.interactions.create.call_count == 2
+        mock_sleep.assert_called_once()
+        mock_client.files.delete.assert_called_once_with(name="files/retry123")
+
+    @patch("os.path.exists", return_value=True)
     def test_api_key_cleanup_on_interaction_failure(self, mock_exists):
         """Verifies client.files.delete is called even when interactions.create fails."""
         mock_client = MagicMock()
