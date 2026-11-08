@@ -971,7 +971,7 @@ def main() -> None:
     setup_logging()
 
     parser = argparse.ArgumentParser(
-        description="Marketing Engineers: Transcription Automator v0.2",
+        description="Marketing Engineers: Transcription Automator v0.3",
     )
     parser.add_argument(
         "input_file",
@@ -1045,7 +1045,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    logger.info("Starting Marketing Engineers Transcription Automator v0.2")
+    logger.info("Starting Marketing Engineers Transcription Automator v0.3")
 
     if args.check_auth:
         ok = check_auth()

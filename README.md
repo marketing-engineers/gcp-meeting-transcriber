@@ -1,4 +1,4 @@
-# Marketing Engineers: Transcription Automator v0.2
+# Marketing Engineers: Transcription Automator v0.3
 
 This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud AI models: Google Cloud Speech-to-Text V2 (Chirp 3) and Gemini 3.5 Transcribe (`gemini-3.5-transcribe`).
 
@@ -258,6 +258,7 @@ The behavior of the script changes based on the language requested, to accommoda
 │   ├── test_main.py
 │   ├── test_transcribe.py
 │   ├── test_transcribe_gcs.py
+│   ├── test_transcribe_gemini.py
 │   └── test_transcript_output.py
 └── src/
     ├── audio.py           # FFmpeg subprocess logic & silence-aware chunking
@@ -267,10 +268,11 @@ The behavior of the script changes based on the language requested, to accommoda
     ├── main.py            # CLI entry point and orchestration
     ├── transcribe.py      # Speech-to-Text V2 BatchRecognize logic
     ├── transcribe_gcs.py  # Direct GCS audio transcription & recovery
+    ├── transcribe_gemini.py # Gemini 3.5 Transcribe integration
     └── transcript_output.py # Transcript formatting and stitching
 ```
 
-## Roadmap & Future Scope (v0.3+)
+## Roadmap & Future Scope (v0.4+)
 
 - **Cross-Chunk Speaker Reconciliation (`gemini-3.6-flash`)**:
   - Pass GCS audio chunk URIs directly to `gemini-3.6-flash` via Vertex AI / Google GenAI SDK to analyze cross-chunk vocal profiles.

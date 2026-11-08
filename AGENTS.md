@@ -16,7 +16,7 @@ This project automates the extraction, processing, and transcription of meeting 
 
 ## 2. Project Phasing & Scope
 
-### [CURRENT SCOPE] Version 0.2: End-to-End Dual-Model Transcription Pipeline
+### [CURRENT SCOPE] Version 0.3: End-to-End Dual-Model Transcription Pipeline
 The pipeline supports both `gemini-3.5-transcribe` and `chirp_3` with intelligent duration-aware and language-aware routing:
 - **Default Preferred Model:** `gemini-3.5-transcribe` for Dutch & English recordings <= 28 min (monolithic with diarization), multilingual code-switching, and smart dictation.
 - **Chirp 3 Model:** Used for English recordings between 28–45 min (monolithic with diarization without chunk cuts), or fast adaptive parallel waves on long recordings when diarization is disabled.
@@ -27,10 +27,10 @@ The pipeline supports both `gemini-3.5-transcribe` and `chirp_3` with intelligen
 - **Interactive Mode:** Human operators running in a terminal pass `-i` / `--interactive` for guided prompts.
 - **Backwards Compatibility:** `--prepare-only` provides FLAC extraction only without GCP/Gemini API calls.
 
-### [FUTURE SCOPE] Version 0.3+
+### [FUTURE SCOPE] Version 0.4+
 - **Cross-Chunk Speaker Reconciliation via Gemini 3.6 Flash Global Speaker Map**:
   - Diarized audio chunks produce per-chunk speaker labels (`1`, `2`, `3`) that reset across chunks.
-  - In v0.3, pass GCS audio chunk URIs directly to `gemini-3.6-flash` via GCP Vertex AI / Google GenAI SDK to analyze cross-chunk vocal profiles.
+  - In v0.4, pass GCS audio chunk URIs directly to `gemini-3.6-flash` via GCP Vertex AI / Google GenAI SDK to analyze cross-chunk vocal profiles.
   - Generate a structured `GlobalSpeakerMap` JSON (e.g., `{"chunk_1": {"1": "Speaker A"}, "chunk_2": {"1": "Speaker B"}}`).
   - Apply mapping to `WordInfo.speaker_label` protobuf fields prior to stitching, restoring 100% speaker label consistency across long recordings without local PyTorch/heavy binary dependencies.
 - **Automatic LLM Summarization Pipeline**: Summarize stitched transcripts natively via Gemini.

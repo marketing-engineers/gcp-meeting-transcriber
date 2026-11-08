@@ -530,7 +530,7 @@ def stitch_diarized_transcripts(
 
     Inserts chunk boundary markers and explicit speaker non-alignment warning notices
     between segments. Speaker numbering resets per chunk — cross-chunk speaker
-    reconciliation is deferred to v0.3.
+    reconciliation is deferred to v0.4.
 
     Args:
         responses: Ordered list of BatchRecognizeResponse or Gemini responses.
