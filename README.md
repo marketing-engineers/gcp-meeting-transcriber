@@ -92,14 +92,15 @@ For high-volume enterprise workloads, Speech-to-Text V2, or Vertex AI:
    cp .env.example .env
    ```
 
-   Key environment variables:
-   - `TRANSCRIPTION_MODEL` (Default: `auto`): Model routing policy (`auto`, `gemini-3.5-transcribe`, or `chirp_3`).
-   - `GEMINI_API_KEY`: API key for Gemini AI Studio.
-   - `GEMINI_BACKEND` (Default: `auto`): Backend selection (`auto`, `api_key`, or `vertex`).
-   - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted concurrently per wave.
-   - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED` (Default: `1680` / 28 min): Safe diarization ceiling for Gemini.
-   - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` / `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Safe ceiling for Chirp 3.
-   - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN` (Default: `3480` / 58 min): Safe plain text ceiling for Gemini.
+    Key environment variables:
+    - `TRANSCRIPTION_MODEL` (Default: `auto`): Model routing policy (`auto`, `gemini-3.5-transcribe`, or `chirp_3`).
+    - `GEMINI_API_KEY`: API key for Gemini AI Studio.
+    - `GEMINI_BACKEND` (Default: `auto`): Backend selection (`auto`, `api_key`, or `vertex`).
+    - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted concurrently per wave.
+    - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED` (Default: `1680` / 28 min): Safe diarization ceiling for Gemini.
+    - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` / `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Safe ceiling for Chirp 3.
+    - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN` (Default: `3480` / 58 min): Safe plain text ceiling for Gemini verbatim mode.
+    - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART` (Default: `1200` / 20 min): Safe chunk ceiling for Gemini smart mode to prevent middle-context omission.
 
 ## Usage
 
@@ -151,7 +152,7 @@ flowchart TD
     %% Long Path
     D -->|"> 45 min (> 2700s)"| L{"Decision Required<br/>(Exit Code 2 or -i Prompt)"}
     L -->|"Diarize"| M["Chunked Diarization<br/>gemini-3.5-transcribe (<=28m)<br/>or chirp_3 (<=45m)"]
-    L -->|"No Diarize"| N["Continuous Plain Text<br/>gemini-3.5-transcribe smart (<=58m)<br/>or chirp_3 fast parallel wave"]
+    L -->|"No Diarize"| N["Continuous Plain Text<br/>gemini-3.5-transcribe verbatim (<=58m)<br/>gemini-3.5-transcribe smart (<=20m)<br/>or chirp_3 fast parallel wave"]
     
     E --> O["Phase 2: Transcription Engine<br/>AI Studio (Files API) or GCP GCS / Speech V2"]
     G --> O
@@ -221,21 +222,14 @@ python -m src.main input/meeting.mp4 --lang en-US --prepare-only
 ```
 You can then manually upload the generated FLACs from the `output/` directory.
 
-### Language Routes
+### Language Routes & Multilingual Code-Switching
 
-The behavior of the script changes based on the language requested, to accommodate Google Cloud's Chirp 3 model constraints.
-
-#### Dutch (`--lang nl-NL`)
-- **Behavior:** Transcribes without diarization (as Chirp 3 does not support diarization for Dutch).
-- **Adaptive Parallel Wave:** Sizing optimizes purely for parallel wall-clock completion in one wave (`N = TRANSCRIPTION_CONCURRENCY`), floored at `CHUNK_MIN_LENGTH_SECONDS` (10 min) and capped at `CHUNK_MAX_LENGTH_SECONDS_DUTCH` (45 min).
-- **Silence Snapping:** Boundaries snap to natural pauses via FFmpeg `silencedetect` within a `±15s` window.
-- **Monolithic Path:** Short recordings (≤ 45 min) naturally process as a single monolithic FLAC with zero chunk cuts.
-
-#### English (`--lang en-US` or `--lang en-GB`)
-- **Behavior:** Transcribes with speaker diarization.
-- **Ceiling-Driven Boundary Minimization:** Maximizes chunk duration up to the ceiling (`CHUNK_MAX_LENGTH_SECONDS_ENGLISH=2700`, 45 min) to minimize speaker ID fragmentation across chunk cuts.
-- **Silence Snapping:** Boundaries snap to natural pauses within `±15s`.
-- **Monolithic Path:** Short recordings (≤ 45 min) process monolithically without boundaries.
+The pipeline automatically handles language-specific routing and code-switching:
+- **European Languages (`nl-NL`, `de-DE`, `fr-FR`, etc.):** When transcribed via Gemini 3.5 Transcribe, requests automatically configure `language_codes=[<lang>, "en-US"]`. This ensures English loanwords, acronyms, and technical terminology are preserved without mid-sentence word drops.
+- **Dynamic Language Detection (`--lang auto`):** Gemini dynamically identifies spoken languages across utterances without prior specification. If no language is provided in interactive mode, the CLI prompts for confirmation before defaulting to `auto`.
+- **Chirp 3 Route Differences:**
+  - **Dutch (`nl-NL`):** Transcribes without diarization on Chirp 3, using adaptive parallel waves (`N = TRANSCRIPTION_CONCURRENCY`, 10–45 min per chunk) for fast completion.
+  - **English (`en-US` / `en-GB`):** Transcribes with speaker diarization up to the 45-minute ceiling (`CHUNK_MAX_LENGTH_SECONDS_ENGLISH=2700`).
 
 ## Project Structure
 

@@ -48,10 +48,22 @@ The pipeline supports both `gemini-3.5-transcribe` and `chirp_3` with intelligen
 
 ### Phase B: Performance Model, Sizing Strategies & Model Routing
 
-#### Safe Duration Ceilings
-- `GEMINI_DIARIZATION_MAX_SECONDS = 1680` (28 min; safe ceiling below 30m API limit)
-- `CHIRP_MAX_SECONDS = 2700` (45 min; verified ceiling for Speech V2 BatchRecognize without word offsets)
-- `GEMINI_PLAIN_MAX_SECONDS = 3480` (58 min; safe ceiling below 60m plain audio API limit)
+#### Safe Duration Ceilings & Transcription Modes
+- `GEMINI_DIARIZATION_MAX_SECONDS = 1680` (28 min; safe ceiling below 30m API limit for speaker diarization).
+- `CHIRP_MAX_SECONDS = 2700` (45 min; verified ceiling for Speech V2 BatchRecognize without word offsets).
+- `GEMINI_PLAIN_MAX_SECONDS = 3480` (58 min; safe ceiling below 60m plain audio API limit for `mode="VERBATIM"`).
+- `GEMINI_SMART_MAX_SECONDS = 1200` (20 min; maximum safe chunk length for `mode="SMART"`).
+  - *Google Developer Documentation Anchor:* Per official Gemini 3.5 Transcribe documentation (`documents/aistudio.google.com/docs/transcribe` & `documents/docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-transcribe`), `mode="SMART"` applies generative post-processing (disfluency removal, inline self-corrections, and structured markdown formatting). Because `mode="SMART"` is incompatible with speaker diarization/word-level timestamps and emits a single monolithic text block rather than discrete turn-anchored parts, feeding long multi-speaker recordings (> 20 min) into `mode="SMART"` causes generative attention drift and severe middle-dialogue omissions. Therefore, `mode="SMART"` is clamped to <= 20 min chunks, while multi-speaker conversations should use `mode="VERBATIM"` with `--diarize`.
+
+#### Multilingual Code-Switching & European Languages
+- For European languages (e.g. Dutch `nl-NL`, German `de-DE`, French `fr-FR`), Gemini Transcribe requests are automatically configured with `language_codes=[<lang>, "en-US"]`.
+- *Why:* Business and technical conversations in European languages frequently incorporate English loanwords, acronyms, and marketing/IT terminology. Restricting `language_codes` to a single non-English language causes the decoder to suppress or drop English noun phrases mid-utterance.
+- If the user runs the interactive flow and does not specify a language, the CLI prompts for confirmation before defaulting to `auto` (automatic dynamic language detection across utterances).
+
+#### Speaker Normalization & Indexing Standard
+- Vertex AI Gemini diarization returns 0-indexed colon-formatted speaker tags (`spk:0`, `spk:1`, etc.).
+- AI Studio returns 1-indexed underscore-formatted tags (`spk_1`, `spk_2`).
+- The pipeline normalizes all speaker tags uniformly to 1-based `Speaker 1:`, `Speaker 2:`, etc. in `src/transcript_output.py`. 0-based tags (`spk:0`, `spk_0`, `0`) are offset to `Speaker 1` to prevent collapsing distinct speakers.
 
 #### Decision Tree & Language Routing
 1. **Short Recordings (duration <= 1680s / 28 min) — All Languages:**
