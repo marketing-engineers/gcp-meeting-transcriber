@@ -18,7 +18,9 @@ from src.config import (
     LANGUAGE_CODES_ENGLISH,
     TRANSCRIPT_OUTPUT_DIR,
     TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+    TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
     TRANSCRIPTION_MODEL,
+    resolve_gemini_language_codes,
     validate_backend_config,
     validate_gcp_config,
 )
@@ -115,6 +117,7 @@ def transcribe_from_gcs(
     diarize: bool | None = None,
     mode: str = "verbatim",
     interactive: bool = False,
+    milestone_interval: int = TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
 ) -> tuple[str, str]:
     """
     Transcribe audio files already residing in a GCS prefix.
@@ -201,9 +204,16 @@ def transcribe_from_gcs(
             max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
         )
         if effective_diarize:
-            transcript_text = stitch_diarized_transcripts(responses)
+            transcript_text = stitch_diarized_transcripts(
+                responses,
+                milestone_interval=milestone_interval,
+            )
         else:
-            transcript_text = stitch_plain_transcripts(responses, mode=mode)
+            transcript_text = stitch_plain_transcripts(
+                responses,
+                mode=mode,
+                milestone_interval=milestone_interval,
+            )
     else:
         responses = transcribe_files(
             gcs_uris=gcs_uris,
@@ -216,19 +226,32 @@ def transcribe_from_gcs(
             max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
         )
         if effective_diarize:
-            transcript_text = stitch_diarized_transcripts(responses)
+            transcript_text = stitch_diarized_transcripts(
+                responses,
+                milestone_interval=milestone_interval,
+            )
         else:
-            transcript_text = stitch_plain_transcripts(responses)
+            transcript_text = stitch_plain_transcripts(
+                responses,
+                milestone_interval=milestone_interval,
+            )
 
-    txt_path, json_path = save_transcript(
+    md_path, json_path = save_transcript(
         transcript_text=transcript_text,
         raw_responses=responses,
         output_dir=TRANSCRIPT_OUTPUT_DIR,
         base_name=base_name,
         lang=lang,
+        duration=None,
+        model=effective_model,
+        diarize=effective_diarize,
+        speaker_count=speaker_count,
+        mode=mode,
+        languages=resolve_gemini_language_codes(lang) if effective_model == "gemini-3.5-transcribe" else [lang],
+        source_file=base_name,
     )
 
-    return txt_path, json_path
+    return md_path, json_path
 
 
 def main() -> None:
@@ -286,13 +309,19 @@ def main() -> None:
         default="verbatim",
         help="Transcription mode for gemini-3.5-transcribe ('verbatim' or 'smart').",
     )
+    parser.add_argument(
+        "--milestone-interval",
+        type=int,
+        default=TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
+        help="Milestone timestamp interval in seconds (default: 300, set to 0 to disable).",
+    )
 
     args = parser.parse_args()
 
     logger.info("Starting GCS Transcription for: %s", args.gcs_target)
 
     try:
-        txt_path, json_path = transcribe_from_gcs(
+        md_path, json_path = transcribe_from_gcs(
             target=args.gcs_target,
             lang=args.lang,
             speaker_count=args.speakers,
@@ -300,9 +329,10 @@ def main() -> None:
             diarize=args.diarize,
             mode=args.mode,
             interactive=args.interactive,
+            milestone_interval=args.milestone_interval,
         )
         logger.info("Transcription completed successfully.")
-        logger.info("Transcript: %s", txt_path)
+        logger.info("Transcript: %s", md_path)
         logger.info("Raw JSON: %s", json_path)
     except ProcessingError as e:
         logger.error("%s", e)

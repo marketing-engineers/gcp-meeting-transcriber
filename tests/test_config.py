@@ -212,12 +212,16 @@ def test_validate_backend_config_auto_no_credentials():
 def test_line_formatting_config_defaults():
     """Verify default values for line formatting configurations."""
     from src.config import (
+        REPOSITORY_NAME,
         TRANSCRIPTION_MAX_CHARS_PER_LINE,
         TRANSCRIPTION_MAX_SENTENCES_PER_LINE,
+        TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
         TRANSCRIPTION_CUSTOM_PROMPT,
     )
     assert isinstance(TRANSCRIPTION_MAX_CHARS_PER_LINE, int)
     assert isinstance(TRANSCRIPTION_MAX_SENTENCES_PER_LINE, int)
+    assert TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS == 300
+    assert REPOSITORY_NAME == "marketing-engineers-gcp-audio-transcribe"
     assert TRANSCRIPTION_CUSTOM_PROMPT is None or isinstance(TRANSCRIPTION_CUSTOM_PROMPT, str)
 
 

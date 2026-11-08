@@ -1,13 +1,21 @@
 """Tests for src/transcript_output.py — transcript formatting logic (no API calls needed)."""
 
+import json
+import os
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.transcript_output import (
     format_diarized_transcript,
+    format_duration_human,
     format_plain_transcript,
+    format_smart_transcript,
+    format_timestamp,
     format_transcript_lines,
+    generate_frontmatter,
+    parse_duration_seconds,
+    save_transcript,
     stitch_diarized_transcripts,
     stitch_plain_transcripts,
 )
@@ -177,7 +185,7 @@ class TestStitchTranscripts:
     """Tests for stitch_diarized_transcripts and stitch_plain_transcripts."""
 
     def test_stitch_diarized_transcripts_includes_boundary_and_notice(self):
-        """Multiple diarized chunks include boundary headers and speaker warning notices."""
+        """Multiple diarized chunks include Markdown Part headers and speaker warning notices."""
         r1 = _make_result(words=[_make_word("Hello", "1")])
         r2 = _make_result(words=[_make_word("World", "1")])
 
@@ -188,8 +196,12 @@ class TestStitchTranscripts:
 
         assert "Speaker 1: Hello" in stitched
         assert "Speaker 1: World" in stitched
-        assert "--- Chunk Boundary (Chunk 2 of 2) ---" in stitched
-        assert "[NOTICE: Speaker numbers in Chunk 2 are local to this chunk and DO NOT correspond to speaker numbers in previous chunks.]" in stitched
+        assert "## Part A (Chunk 1 of 2)" in stitched
+        assert "## Part B (Chunk 2 of 2)" in stitched
+        assert "Speaker Attribution Scope" in stitched
+        assert "Speaker Attribution Notice" in stitched
+        assert "DO NOT correspond to speaker numbers in previous chunks" in stitched
+        assert "Speaker labels from Part A might not align with Part B" in stitched
 
     def test_stitch_plain_transcripts_single_chunk_has_no_boundary(self):
         """Single plain transcript chunk has no boundary headers."""
@@ -198,10 +210,11 @@ class TestStitchTranscripts:
 
         stitched = stitch_plain_transcripts([resp1])
         assert stitched == "Hello world"
-        assert "Chunk Boundary" not in stitched
+        assert "Part A" not in stitched
+        assert "Part B" not in stitched
 
     def test_stitch_plain_transcripts_multiple_chunks_includes_boundary(self):
-        """Multiple plain transcript chunks include chunk boundary markers."""
+        """Multiple plain transcript chunks include Markdown chunk headers."""
         r1 = _make_result(transcript="Chunk one content.")
         r2 = _make_result(transcript="Chunk two content.")
 
@@ -210,5 +223,246 @@ class TestStitchTranscripts:
 
         stitched = stitch_plain_transcripts([resp1, resp2])
         assert "Chunk one content." in stitched
-        assert "--- Chunk Boundary (Chunk 2 of 2) ---" in stitched
+        assert "## Part A (Chunk 1 of 2)" in stitched
+        assert "## Part B (Chunk 2 of 2)" in stitched
         assert "Chunk two content." in stitched
+
+
+class TestFrontmatterAndFormatting:
+    """Tests for frontmatter generation and time formatting helpers."""
+
+    def test_format_duration_human(self):
+        assert format_duration_human(None) == "unknown"
+        assert format_duration_human(-5) == "unknown"
+        assert format_duration_human(45.2) == "0m 45s"
+        assert format_duration_human(300.0) == "5m 00s"
+        assert format_duration_human(2712.5) == "45m 12s"
+        assert format_duration_human(3665.0) == "1h 01m 05s"
+
+    def test_format_timestamp(self):
+        assert format_timestamp(0) == "[00:00]"
+        assert format_timestamp(300) == "[05:00]"
+        assert format_timestamp(3600) == "[01:00:00]"
+        assert format_timestamp(300, include_hours=True) == "[00:05:00]"
+        assert format_timestamp(3905, include_hours=True) == "[01:05:05]"
+
+    def test_parse_duration_seconds(self):
+        assert parse_duration_seconds(None) is None
+        assert parse_duration_seconds(42) == 42.0
+        assert parse_duration_seconds(42.5) == 42.5
+        assert parse_duration_seconds("15.5s") == 15.5
+        assert parse_duration_seconds("05:30") == 330.0
+        assert parse_duration_seconds("01:05:30") == 3930.0
+        assert parse_duration_seconds({"seconds": 10, "nanos": 500000000}) == 10.5
+
+    def test_generate_frontmatter_full(self):
+        fm = generate_frontmatter(
+            source_file="input/quarterly_review.mp4",
+            duration=2712.5,
+            repository="marketing-engineers-gcp-audio-transcribe",
+            model="gemini-3.5-transcribe",
+            mode="verbatim",
+            lang="nl-NL",
+            languages=["nl-NL", "en-US"],
+            diarize=True,
+            speakers=3,
+            generated_at="2026-11-08T16:00:00Z",
+        )
+        assert fm.startswith("---\n")
+        assert fm.endswith("---")
+        assert 'generated_at: "2026-11-08T16:00:00Z"' in fm
+        assert 'source_file: "quarterly_review.mp4"' in fm
+        assert 'duration: "45m 12s"' in fm
+        assert "duration_seconds: 2712.5" in fm
+        assert 'repository: "marketing-engineers-gcp-audio-transcribe"' in fm
+        assert 'model: "gemini-3.5-transcribe"' in fm
+        assert 'mode: "verbatim"' in fm
+        assert 'language: "nl-NL"' in fm
+        assert '- "nl-NL"' in fm
+        assert '- "en-US"' in fm
+        assert "diarization: true" in fm
+        assert "speakers: 3" in fm
+
+    def test_generate_frontmatter_escapes_quotes(self):
+        """Filenames with quotes or special characters are safely escaped for YAML."""
+        fm = generate_frontmatter(
+            source_file='Meeting "Q3 Strategy" & Review.mp4',
+            lang="en-US",
+            generated_at="2026-11-08T12:00:00Z",
+        )
+        assert r'source_file: "Meeting \"Q3 Strategy\" & Review.mp4"' in fm
+
+    def test_generate_frontmatter_defaults(self):
+        fm = generate_frontmatter(
+            lang="en-US",
+            generated_at="2026-11-08T12:00:00Z",
+        )
+        assert 'generated_at: "2026-11-08T12:00:00Z"' in fm
+        assert 'repository: "marketing-engineers-gcp-audio-transcribe"' in fm
+        assert 'language: "en-US"' in fm
+
+
+class TestMilestoneTimestamps:
+    """Tests for milestone indicator insertion."""
+
+    def test_diarized_milestones_every_5_minutes(self):
+        """A recording longer than 5 minutes receives a milestone indicator."""
+        words1 = [_make_word(f"word{i}", "1") for i in range(50)]
+        words2 = [_make_word(f"word{i}", "2") for i in range(50)]
+        r = _make_result(words=words1 + words2)
+
+        # Total duration 600 seconds (10 min), milestone interval 300 (5 min)
+        formatted = format_diarized_transcript(
+            [r],
+            duration=600.0,
+            milestone_interval=300.0,
+        )
+        assert "_**[05:00]**_" in formatted
+
+    def test_plain_milestones_every_5_minutes(self):
+        """Plain transcript longer than 5 minutes receives milestone indicator."""
+        text = ". ".join([f"Sentence number {i} discussing progress" for i in range(20)]) + "."
+        r = _make_result(transcript=text)
+
+        formatted = format_plain_transcript(
+            [r],
+            duration=600.0,
+            milestone_interval=300.0,
+        )
+        assert "_**[05:00]**_" in formatted
+
+    def test_plain_milestones_short_chunk_crossing_cumulative_milestone(self):
+        """Short remainder chunk crossing a milestone on cumulative timeline receives milestone."""
+        text = "Short wrap up segment of the discussion."
+        r = _make_result(transcript=text)
+
+        # Chunk is only 100s (< 300s), but starts at 250s, so crosses 300s milestone
+        formatted = format_plain_transcript(
+            [r],
+            time_offset=250.0,
+            duration=100.0,
+            milestone_interval=300.0,
+        )
+        assert "_**[05:00]**_" in formatted
+
+    def test_milestone_on_exact_boundary(self):
+        """A chunk starting on an exact milestone multiple (e.g. 300s) does not skip it."""
+        words = [_make_word(f"w{i}", "1") for i in range(20)]
+        r = _make_result(words=words)
+
+        formatted = format_diarized_transcript(
+            [r],
+            time_offset=300.0,
+            duration=300.0,
+            milestone_interval=300.0,
+        )
+        assert "_**[05:00]**_" in formatted
+
+    def test_smart_milestones_every_5_minutes(self):
+        """Smart transcript with bullet points receives milestone indicator."""
+        lines = [f"* Action item {i}: follow up with team" for i in range(20)]
+        text = "\n".join(lines)
+
+        formatted = format_smart_transcript(
+            text,
+            duration=600.0,
+            milestone_interval=300.0,
+        )
+        assert "_**[05:00]**_" in formatted
+
+    def test_smart_transcript_preserves_paragraph_blank_lines(self):
+        """Smart transcript preserves blank lines separating paragraphs."""
+        input_text = "# Header\n\nFirst paragraph content.\n\nSecond paragraph content.\n\n* Bullet 1\n* Bullet 2"
+        formatted = format_smart_transcript(input_text, duration=100.0, milestone_interval=0.0)
+        assert "\n\nFirst paragraph content.\n\n" in formatted
+        assert "\n\nSecond paragraph content.\n\n" in formatted
+
+    def test_custom_milestone_interval(self):
+        """Configurable milestone interval (e.g. 60 seconds)."""
+        words = [_make_word(f"w{i}", "1") for i in range(20)]
+        r = _make_result(words=words)
+
+        formatted = format_diarized_transcript(
+            [r],
+            duration=150.0,
+            milestone_interval=60.0,
+        )
+        assert "_**[01:00]**_" in formatted
+        assert "_**[02:00]**_" in formatted
+
+    def test_milestone_disabled_when_zero(self):
+        """Milestone indicators are suppressed when milestone_interval is 0."""
+        words = [_make_word(f"w{i}", "1") for i in range(20)]
+        r = _make_result(words=words)
+
+        formatted = format_diarized_transcript(
+            [r],
+            duration=600.0,
+            milestone_interval=0.0,
+        )
+        assert "_**[" not in formatted
+
+    def test_multi_chunk_cumulative_milestones(self):
+        """Multi-chunk stitching properly tracks cumulative timeline across chunks."""
+        # Chunk 1: 1680s (28m), Chunk 2: 1020s (17m). Total 2700s (45m).
+        r1 = _make_result(words=[_make_word(f"c1_{i}", "1") for i in range(40)])
+        r2 = _make_result(words=[_make_word(f"c2_{i}", "1") for i in range(40)])
+        resp1 = _make_batch_response([r1])
+        resp2 = _make_batch_response([r2])
+
+        stitched = stitch_diarized_transcripts(
+            [resp1, resp2],
+            chunk_durations=[1680.0, 1020.0],
+            total_duration=2700.0,
+            milestone_interval=300.0,
+        )
+        # Part A has 05:00, 10:00, 15:00, 20:00, 25:00
+        assert "_**[05:00]**_" in stitched
+        assert "_**[25:00]**_" in stitched
+        # Part B begins at 28:00, so first milestone in Part B is 30:00
+        assert "_**[30:00]**_" in stitched
+        assert "_**[35:00]**_" in stitched
+
+
+class TestSaveTranscriptMarkdown:
+    """Tests for saving .md files with YAML frontmatter."""
+
+    def test_save_transcript_creates_markdown_and_raw_json(self, tmp_path):
+        out_dir = str(tmp_path / "transcripts")
+        raw_responses = [{"output_text": "Speaker 1: Hi", "confidence": 0.98}]
+
+        md_path, json_path = save_transcript(
+            transcript_text="Speaker 1: Hi",
+            raw_responses=raw_responses,
+            output_dir=out_dir,
+            base_name="meeting_2026",
+            lang="nl-NL",
+            duration=1200.0,
+            model="gemini-3.5-transcribe",
+            diarize=True,
+            speaker_count=2,
+            mode="verbatim",
+            languages=["nl-NL", "en-US"],
+            source_file="input/meeting_2026.mp4",
+        )
+
+        assert os.path.exists(md_path)
+        assert os.path.exists(json_path)
+        assert md_path.endswith("_transcript.md")
+        assert json_path.endswith("_raw.json")
+
+        with open(md_path, "r", encoding="utf-8") as f:
+            md_content = f.read()
+
+        assert md_content.startswith("---")
+        assert 'source_file: "meeting_2026.mp4"' in md_content
+        assert 'duration: "20m 00s"' in md_content
+        assert "duration_seconds: 1200.0" in md_content
+        assert 'repository: "marketing-engineers-gcp-audio-transcribe"' in md_content
+        assert 'model: "gemini-3.5-transcribe"' in md_content
+        assert 'mode: "verbatim"' in md_content
+        assert 'language: "nl-NL"' in md_content
+        assert "diarization: true" in md_content
+        assert "speakers: 2" in md_content
+        assert "# Transcript: meeting_2026.mp4" in md_content
+        assert "Speaker 1: Hi" in md_content

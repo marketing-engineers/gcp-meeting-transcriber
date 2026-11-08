@@ -29,7 +29,9 @@ from src.config import (
     TRANSCRIPT_OUTPUT_DIR,
     TRANSCRIPTION_CONCURRENCY,
     TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
+    TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
     TRANSCRIPTION_MODEL,
+    resolve_gemini_language_codes,
     validate_backend_config,
     validate_extension,
     validate_gcp_config,
@@ -654,6 +656,7 @@ def execute_transcription_plan(
     duration: float,
     plan: TranscriptionPlan,
     prepare_only: bool = False,
+    milestone_interval: int = TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
 ) -> None:
     """Executes chunking, upload, transcription, stitching, saving, and cleanup per plan."""
     silences = detect_silences(
@@ -764,10 +767,26 @@ def execute_transcription_plan(
                 )
 
             logger.info("Transcription complete. Processing results...")
+            chunk_durs = (
+                [boundaries[0]] + [boundaries[k] - boundaries[k - 1] for k in range(1, len(boundaries))] + [duration - boundaries[-1]]
+                if is_chunked and boundaries
+                else [duration]
+            )
             if plan.diarize:
-                transcript_text = stitch_diarized_transcripts(responses)
+                transcript_text = stitch_diarized_transcripts(
+                    responses,
+                    chunk_durations=chunk_durs,
+                    total_duration=duration,
+                    milestone_interval=milestone_interval,
+                )
             else:
-                transcript_text = stitch_plain_transcripts(responses, mode=plan.mode)
+                transcript_text = stitch_plain_transcripts(
+                    responses,
+                    mode=plan.mode,
+                    chunk_durations=chunk_durs,
+                    total_duration=duration,
+                    milestone_interval=milestone_interval,
+                )
 
             save_transcript(
                 transcript_text=transcript_text,
@@ -775,6 +794,13 @@ def execute_transcription_plan(
                 output_dir=TRANSCRIPT_OUTPUT_DIR,
                 base_name=base_name,
                 lang=lang,
+                duration=duration,
+                model=plan.model,
+                diarize=plan.diarize,
+                speaker_count=plan.speaker_count,
+                mode=plan.mode,
+                languages=resolve_gemini_language_codes(lang) if plan.model == "gemini-3.5-transcribe" else [lang],
+                source_file=input_path,
             )
 
         elif plan.model == "chirp_3":
@@ -828,10 +854,25 @@ def execute_transcription_plan(
                 responses = [response]
 
             logger.info("Transcription complete. Processing results...")
+            chunk_durs = (
+                [boundaries[0]] + [boundaries[k] - boundaries[k - 1] for k in range(1, len(boundaries))] + [duration - boundaries[-1]]
+                if is_chunked and boundaries
+                else [duration]
+            )
             if plan.diarize:
-                transcript_text = stitch_diarized_transcripts(responses)
+                transcript_text = stitch_diarized_transcripts(
+                    responses,
+                    chunk_durations=chunk_durs,
+                    total_duration=duration,
+                    milestone_interval=milestone_interval,
+                )
             else:
-                transcript_text = stitch_plain_transcripts(responses)
+                transcript_text = stitch_plain_transcripts(
+                    responses,
+                    chunk_durations=chunk_durs,
+                    total_duration=duration,
+                    milestone_interval=milestone_interval,
+                )
 
             save_transcript(
                 transcript_text=transcript_text,
@@ -839,6 +880,13 @@ def execute_transcription_plan(
                 output_dir=TRANSCRIPT_OUTPUT_DIR,
                 base_name=base_name,
                 lang=lang,
+                duration=duration,
+                model="chirp_3",
+                diarize=plan.diarize,
+                speaker_count=plan.speaker_count,
+                mode=None,
+                languages=[lang],
+                source_file=input_path,
             )
         else:
             raise ProcessingError(f"Unsupported transcription model: {plan.model}")
@@ -863,7 +911,13 @@ def execute_transcription_plan(
             logger.info("Removed local FLAC: %s", final_output)
 
 
-def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: bool) -> None:
+def _process_dutch(
+    input_path: str,
+    base_name: str,
+    lang: str,
+    prepare_only: bool,
+    milestone_interval: int = TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
+) -> None:
     """Backward-compatibility route for Dutch processing using chirp_3 without diarization."""
     final_output = os.path.join(OUTPUT_DIR, f"{base_name}_{lang}.flac")
     extract_audio_to_flac(input_path, final_output)
@@ -882,10 +936,17 @@ def _process_dutch(input_path: str, base_name: str, lang: str, prepare_only: boo
         duration=duration,
         plan=plan,
         prepare_only=prepare_only,
+        milestone_interval=milestone_interval,
     )
 
 
-def _process_english(input_path: str, base_name: str, lang: str, prepare_only: bool) -> None:
+def _process_english(
+    input_path: str,
+    base_name: str,
+    lang: str,
+    prepare_only: bool,
+    milestone_interval: int = TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
+) -> None:
     """Backward-compatibility route for English processing using chirp_3 with diarization."""
     final_output = os.path.join(OUTPUT_DIR, f"{base_name}_{lang}.flac")
     extract_audio_to_flac(input_path, final_output)
@@ -906,6 +967,7 @@ def _process_english(input_path: str, base_name: str, lang: str, prepare_only: b
         duration=duration,
         plan=plan,
         prepare_only=prepare_only,
+        milestone_interval=milestone_interval,
     )
 
 
@@ -918,6 +980,7 @@ def process_file(
     mode: str = "verbatim",
     speaker_count: int | None = None,
     interactive: bool = False,
+    milestone_interval: int = TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
 ) -> None:
     """
     Orchestrates the full audio processing and transcription pipeline for a single file.
@@ -999,6 +1062,7 @@ def process_file(
         duration=duration,
         plan=plan,
         prepare_only=prepare_only,
+        milestone_interval=milestone_interval,
     )
 
 
@@ -1077,6 +1141,12 @@ def main() -> None:
         default=None,
         help="Optional speaker count hint for diarization.",
     )
+    parser.add_argument(
+        "--milestone-interval",
+        type=int,
+        default=TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS,
+        help="Milestone timestamp interval in seconds (default: 300, set to 0 to disable).",
+    )
 
     args = parser.parse_args()
 
@@ -1124,7 +1194,7 @@ def main() -> None:
             speaker_count = args.speakers
             if speaker_count is None and args.lang in LANGUAGE_CODES_ENGLISH and args.interactive:
                 speaker_count = _prompt_speaker_count()
-            txt_path, json_path = transcribe_from_gcs(
+            md_path, json_path = transcribe_from_gcs(
                 target=args.from_gcs,
                 lang=args.lang,
                 speaker_count=speaker_count,
@@ -1132,8 +1202,9 @@ def main() -> None:
                 diarize=args.diarize,
                 mode=args.mode,
                 interactive=args.interactive,
+                milestone_interval=args.milestone_interval,
             )
-            logger.info("Transcript saved to: %s", txt_path)
+            logger.info("Transcript saved to: %s", md_path)
             logger.info("Raw API response saved to: %s", json_path)
         else:
             process_file(
@@ -1145,6 +1216,7 @@ def main() -> None:
                 mode=args.mode,
                 speaker_count=args.speakers,
                 interactive=args.interactive,
+                milestone_interval=args.milestone_interval,
             )
     except ProcessingError as e:
         logger.error("%s", e)

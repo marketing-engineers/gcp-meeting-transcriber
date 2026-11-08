@@ -82,14 +82,14 @@ class TestTranscribeFromGcs:
         mock_list.return_value = ["gs://b/p/chunk_000.flac", "gs://b/p/chunk_001.flac"]
         mock_tf.return_value = [MagicMock(), MagicMock()]
         mock_stitch.return_value = "Stitched text"
-        mock_save.return_value = ("transcripts/t.txt", "transcripts/t.json")
+        mock_save.return_value = ("transcripts/t.md", "transcripts/t.json")
 
-        txt, raw_json = transcribe_from_gcs(
+        md_path, raw_json = transcribe_from_gcs(
             target="gs://b/meeting_20260820_152628",
             lang="nl-NL",
         )
 
-        assert txt == "transcripts/t.txt"
+        assert md_path == "transcripts/t.md"
         assert raw_json == "transcripts/t.json"
         mock_tf.assert_called_once()
         # Diarization should be False for Dutch
@@ -106,15 +106,15 @@ class TestTranscribeFromGcs:
         mock_list.return_value = ["gs://b/p/chunk_000.flac"]
         mock_tf.return_value = [MagicMock()]
         mock_stitch.return_value = "Speaker 1: Hi"
-        mock_save.return_value = ("transcripts/t.txt", "transcripts/t.json")
+        mock_save.return_value = ("transcripts/t.md", "transcripts/t.json")
 
-        txt, raw_json = transcribe_from_gcs(
+        md_path, raw_json = transcribe_from_gcs(
             target="gs://b/meeting_20260820_152628",
             lang="en-US",
             speaker_count=3,
         )
 
-        assert txt == "transcripts/t.txt"
+        assert md_path == "transcripts/t.md"
         assert raw_json == "transcripts/t.json"
         # Diarization should be True for English with 3 speakers
         assert mock_tf.call_args.kwargs["enable_diarization"] is True

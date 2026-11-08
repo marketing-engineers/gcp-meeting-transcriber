@@ -309,7 +309,7 @@ class TestSaveTranscriptHybridSerialization:
         out_dir = str(tmp_path / "transcripts")
         raw_responses = [{"output_text": "Speaker 1: Testing", "custom_id": 42}]
 
-        txt_p, json_p = save_transcript(
+        md_p, json_p = save_transcript(
             transcript_text="Speaker 1: Testing",
             raw_responses=raw_responses,
             output_dir=out_dir,
@@ -317,8 +317,14 @@ class TestSaveTranscriptHybridSerialization:
             lang="en-US",
         )
 
-        assert os.path.exists(txt_p)
+        assert os.path.exists(md_p)
         assert os.path.exists(json_p)
+        assert md_p.endswith("_transcript.md")
+        with open(md_p, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert content.startswith("---")
+        assert "marketing-engineers-gcp-audio-transcribe" in content
+        assert "Speaker 1: Testing" in content
         with open(json_p, "r", encoding="utf-8") as f:
             data = json.load(f)
         assert data[0]["custom_id"] == 42

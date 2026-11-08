@@ -45,6 +45,7 @@ logs/*
 *.webm
 *_raw.json
 *_transcript.txt
+*_transcript.md
 *.log
 
 # OS files
