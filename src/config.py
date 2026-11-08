@@ -75,6 +75,8 @@ def _get_optional_str(key: str) -> str | None:
 
 CHUNK_MAX_LENGTH_SECONDS_DUTCH: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_DUTCH", 2700)
 CHUNK_MAX_LENGTH_SECONDS_ENGLISH: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_ENGLISH", 2700)
+CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED", 1680)
+CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN", 3480)
 CHUNK_MIN_LENGTH_SECONDS: int = _get_int("CHUNK_MIN_LENGTH_SECONDS", 600)
 CHUNK_SILENCE_SEARCH_WINDOW_SECONDS: float = _get_float("CHUNK_SILENCE_SEARCH_WINDOW_SECONDS", 15.0)
 CHUNK_SILENCE_NOISE_THRESHOLD_DB: int = _get_int("CHUNK_SILENCE_NOISE_THRESHOLD_DB", -30)
@@ -99,17 +101,21 @@ TRANSCRIPTION_MAX_CHARS_PER_LINE: int = _get_int("TRANSCRIPTION_MAX_CHARS_PER_LI
 TRANSCRIPTION_MAX_SENTENCES_PER_LINE: int = _get_int("TRANSCRIPTION_MAX_SENTENCES_PER_LINE", 3)
 
 # ---------------------------------------------------------------------------
-# GCP Configuration (required for transcription, optional for --prepare-only)
+# GCP & Gemini Model Configuration
 # ---------------------------------------------------------------------------
 
 GCP_PROJECT_ID: str | None = _get_optional_str("GCP_PROJECT_ID")
 GCS_BUCKET_NAME: str | None = _get_optional_str("GCS_BUCKET_NAME")
 GCP_REGION: str = _get_str("GCP_REGION", "eu")
-TRANSCRIPTION_MODEL: str = _get_str("TRANSCRIPTION_MODEL", "chirp_3")
+TRANSCRIPTION_MODEL: str = _get_str("TRANSCRIPTION_MODEL", "auto")
 TRANSCRIPTION_CONCURRENCY: int = _get_int("TRANSCRIPTION_CONCURRENCY", 5)
 TRANSCRIPTION_MAX_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_MAX_TIMEOUT_SECONDS", 1800)
 GCS_UPLOAD_TIMEOUT_SECONDS: int = _get_int("GCS_UPLOAD_TIMEOUT_SECONDS", 600)
 TRANSCRIPTION_CUSTOM_PROMPT: str | None = _get_optional_str("TRANSCRIPTION_CUSTOM_PROMPT")
+
+# Gemini Configuration
+GEMINI_API_KEY: str | None = _get_optional_str("GEMINI_API_KEY")
+GEMINI_BACKEND: str = _get_str("GEMINI_BACKEND", "auto").lower()
 
 # GCP Authentication Configuration
 GCP_AUTH_MODE: str = _get_str("GCP_AUTH_MODE", "adc").lower()
@@ -151,4 +157,55 @@ def validate_gcp_config() -> None:
         raise ValueError(
             f"Missing required GCP configuration: {', '.join(missing)}. "
             f"Set these in your .env file. See .env.example for reference."
+        )
+
+
+def validate_backend_config(model: str = "auto", backend: str | None = None) -> None:
+    """
+    Validates configuration based on the target transcription model and backend.
+    - If model is 'gemini-3.5-transcribe' with API key, only GEMINI_API_KEY is required.
+    - If model is 'chirp_3' or Vertex AI backend, full GCP configuration is required.
+    - If model is 'auto', requires at least GEMINI_API_KEY or valid GCP configuration.
+    """
+    effective_backend = backend or GEMINI_BACKEND
+
+    if model == "chirp_3":
+        validate_gcp_config()
+        return
+
+    if model == "gemini-3.5-transcribe":
+        if effective_backend == "api_key":
+            if not GEMINI_API_KEY:
+                raise ValueError(
+                    "Missing required GEMINI_API_KEY for gemini-3.5-transcribe in api_key mode. "
+                    "Set GEMINI_API_KEY in your .env file."
+                )
+            return
+        if effective_backend == "vertex":
+            validate_gcp_config()
+            return
+        # auto backend
+        if GEMINI_API_KEY:
+            return
+        if GCP_PROJECT_ID:
+            validate_gcp_config()
+            return
+        raise ValueError(
+            "Missing configuration for gemini-3.5-transcribe. "
+            "Please provide GEMINI_API_KEY (for AI Studio) or configure GCP credentials (for Vertex AI)."
+        )
+
+    # model == "auto"
+    has_api_key = bool(GEMINI_API_KEY)
+    has_gcp = False
+    try:
+        validate_gcp_config()
+        has_gcp = True
+    except ValueError:
+        has_gcp = False
+
+    if not has_api_key and not has_gcp:
+        raise ValueError(
+            "No transcription credentials configured. "
+            "Please set GEMINI_API_KEY or configure GCP_PROJECT_ID and GCS_BUCKET_NAME in your .env file."
         )
