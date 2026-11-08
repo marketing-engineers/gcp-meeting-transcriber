@@ -11,17 +11,21 @@ from src.config import (
     GCP_PROJECT_ID,
     GCP_REGION,
     GCS_BUCKET_NAME,
+    GEMINI_API_KEY,
+    GEMINI_BACKEND,
     LANGUAGE_CODES_ALL,
     LANGUAGE_CODES_DUTCH,
     LANGUAGE_CODES_ENGLISH,
     TRANSCRIPT_OUTPUT_DIR,
     TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
     TRANSCRIPTION_MODEL,
+    validate_backend_config,
     validate_gcp_config,
 )
 from src.gcs import list_gcs_uris_under_prefix
 from src.logger import setup_logging
 from src.transcribe import transcribe_files
+from src.transcribe_gemini import transcribe_gemini_files
 from src.transcript_output import (
     save_transcript,
     stitch_diarized_transcripts,
@@ -107,6 +111,10 @@ def transcribe_from_gcs(
     target: str,
     lang: str,
     speaker_count: int | None = None,
+    model: str = "auto",
+    diarize: bool | None = None,
+    mode: str = "verbatim",
+    interactive: bool = False,
 ) -> tuple[str, str]:
     """
     Transcribe audio files already residing in a GCS prefix.
@@ -115,14 +123,18 @@ def transcribe_from_gcs(
         1. Validate GCP configuration.
         2. Resolve bucket name and prefix.
         3. List and sort all audio files under prefix.
-        4. Route by language (diarized for English, non-diarized for Dutch).
+        4. Resolve model and diarization mode.
         5. Submit batch transcription requests with bounded concurrency and 429 retry.
         6. Stitch results and save plain text transcript and raw JSON.
 
     Args:
         target: GCS URI (gs://bucket/prefix) or prefix under default bucket.
-        lang: Language code (e.g. 'nl-NL', 'en-US').
+        lang: Language code (e.g. 'nl-NL', 'en-US', 'auto').
         speaker_count: Optional speaker count hint for English diarization.
+        model: 'auto', 'gemini-3.5-transcribe', or 'chirp_3'.
+        diarize: Force True, False, or None (auto-resolve).
+        mode: Transcription mode for Gemini ('verbatim' or 'smart').
+        interactive: Interactive mode flag.
 
     Returns:
         Tuple of (transcript_file_path, json_file_path).
@@ -140,41 +152,73 @@ def transcribe_from_gcs(
     lang_lower = lang.lower()
     base_name = derive_base_name(prefix, gcs_uris)
 
+    # Resolve effective model and diarization
+    effective_model = model
+    if effective_model == "auto":
+        if lang_lower in LANGUAGE_CODES_DUTCH:
+            if diarize is True:
+                effective_model = "gemini-3.5-transcribe"
+                effective_diarize = True
+            else:
+                effective_model = "chirp_3"
+                effective_diarize = False
+        elif lang_lower == "auto":
+            effective_model = "gemini-3.5-transcribe"
+            effective_diarize = True if diarize is None else diarize
+        else:
+            effective_model = "chirp_3"
+            effective_diarize = True if diarize is None else diarize
+    else:
+        if diarize is not None:
+            effective_diarize = diarize
+        else:
+            effective_diarize = (lang_lower in LANGUAGE_CODES_ENGLISH)
+
+    if effective_model == "chirp_3":
+        if lang_lower in LANGUAGE_CODES_DUTCH and effective_diarize:
+            raise ProcessingError(
+                "Chirp 3 does not support speaker diarization for Dutch (nl-NL). "
+                "Please use --model gemini-3.5-transcribe or --no-diarize."
+            )
+        if lang_lower == "auto":
+            raise ProcessingError(
+                "Chirp 3 does not support --lang auto. "
+                "Specify an explicit language code or use --model gemini-3.5-transcribe."
+            )
+
     logger.info(
-        "Initiating GCS transcription for %d file(s) under gs://%s/%s/ (base name: %s, lang: %s)...",
-        len(gcs_uris), bucket_name, prefix, base_name, lang,
+        "Initiating GCS transcription for %d file(s) under gs://%s/%s/ (base name: %s, model: %s, lang: %s, diarize: %s)...",
+        len(gcs_uris), bucket_name, prefix, base_name, effective_model, lang, effective_diarize,
     )
 
-    if lang_lower in LANGUAGE_CODES_DUTCH:
-        responses = transcribe_files(
-            gcs_uris=gcs_uris,
+    if effective_model == "gemini-3.5-transcribe":
+        responses = transcribe_gemini_files(
+            audio_targets=gcs_uris,
             lang=lang,
-            enable_diarization=False,
-            speaker_count=None,
-            project_id=GCP_PROJECT_ID,
-            region=GCP_REGION,
-            model=TRANSCRIPTION_MODEL,
+            diarize=effective_diarize,
+            mode=mode,
+            backend="vertex",
             max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
         )
-        logger.info("Transcription complete. Processing Dutch results...")
-        transcript_text = stitch_plain_transcripts(responses)
-    elif lang_lower in LANGUAGE_CODES_ENGLISH:
+        if effective_diarize:
+            transcript_text = stitch_diarized_transcripts(responses)
+        else:
+            transcript_text = stitch_plain_transcripts(responses, mode=mode)
+    else:
         responses = transcribe_files(
             gcs_uris=gcs_uris,
             lang=lang,
-            enable_diarization=True,
+            enable_diarization=effective_diarize,
             speaker_count=speaker_count,
             project_id=GCP_PROJECT_ID,
             region=GCP_REGION,
-            model=TRANSCRIPTION_MODEL,
+            model="chirp_3",
             max_timeout=TRANSCRIPTION_MAX_TIMEOUT_SECONDS,
         )
-        logger.info("Transcription complete. Processing English results...")
-        transcript_text = stitch_diarized_transcripts(responses)
-    else:
-        raise ProcessingError(
-            f"Unsupported language route: {lang}. Configured languages: {', '.join(LANGUAGE_CODES_ALL)}"
-        )
+        if effective_diarize:
+            transcript_text = stitch_diarized_transcripts(responses)
+        else:
+            transcript_text = stitch_plain_transcripts(responses)
 
     txt_path, json_path = save_transcript(
         transcript_text=transcript_text,
@@ -201,7 +245,7 @@ def main() -> None:
     parser.add_argument(
         "--lang",
         required=True,
-        choices=[code.lower() for code in LANGUAGE_CODES_ALL],
+        choices=[code.lower() for code in LANGUAGE_CODES_ALL] + ["auto"],
         type=str.lower,
         help="Language of the recording (determines processing route).",
     )
@@ -210,6 +254,37 @@ def main() -> None:
         type=int,
         default=None,
         help="Optional speaker count hint for English diarization.",
+    )
+    parser.add_argument(
+        "-i", "--interactive",
+        action="store_true",
+        default=False,
+        help="Enable interactive terminal prompts.",
+    )
+    parser.add_argument(
+        "--model",
+        choices=["auto", "gemini-3.5-transcribe", "chirp_3"],
+        default=TRANSCRIPTION_MODEL,
+        help="Model to use for transcription (default: from TRANSCRIPTION_MODEL).",
+    )
+    parser.add_argument(
+        "--diarize",
+        dest="diarize",
+        action="store_true",
+        default=None,
+        help="Force enable speaker diarization.",
+    )
+    parser.add_argument(
+        "--no-diarize",
+        dest="diarize",
+        action="store_false",
+        help="Force disable speaker diarization.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["verbatim", "smart"],
+        default="verbatim",
+        help="Transcription mode for gemini-3.5-transcribe ('verbatim' or 'smart').",
     )
 
     args = parser.parse_args()
@@ -221,6 +296,10 @@ def main() -> None:
             target=args.gcs_target,
             lang=args.lang,
             speaker_count=args.speakers,
+            model=args.model,
+            diarize=args.diarize,
+            mode=args.mode,
+            interactive=args.interactive,
         )
         logger.info("Transcription completed successfully.")
         logger.info("Transcript: %s", txt_path)
