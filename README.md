@@ -1,11 +1,80 @@
 # Marketing Engineers: Transcription Automator v0.3
 
-This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud AI models: Google Cloud Speech-to-Text V2 (Chirp 3) and Gemini 3.5 Transcribe (`gemini-3.5-transcribe`).
+## Introduction
 
-## Background
+### Background
 There is a huge benefit to having a transcript of your meetings, but we don't like sharing recordings with third parties. Since we have been working with Google Cloud for years, we wanted to build a solution that is secure, private, and cost-effective.
 
-## Quickstart Options
+### Overview
+This project automates the extraction, processing, and transcription of meeting recordings of various formats (e.g., Google Meet `.mp4`, voice memos `.m4a`, etc.) using Python, `ffmpeg`, and Google Cloud AI models: Google Cloud Speech-to-Text V2 (Chirp 3) and Gemini 3.5 Transcribe (`gemini-3.5-transcribe`).
+
+### Data Handling & Privacy
+- **Your Cloud, Your Data:** Audio is processed using your own Google AI Studio key or your private Google Cloud Storage (GCS) bucket.
+- **Automated Cleanup:** Audio chunks uploaded to Gemini Files API or GCS are automatically deleted in a `finally` execution block upon completion or failure.
+- **Bucket Hardening:** We recommend configuring your GCS bucket with Uniform Bucket-Level Access, Public Access Prevention, and a 7-day lifecycle deletion policy.
+- **Local Isolation:** Raw media (`input/`), intermediate audio (`output/`), generated transcripts (`transcripts/`), and local logs (`logs/`) are strictly gitignored with built-in pre-commit guardrails to prevent accidental commits of confidential data.
+
+---
+
+## Sample Transcript Output
+
+Transcripts are delivered as clean, ready-to-read Markdown files (`transcripts/<basename>_<lang>_transcript.md`) complete with structured YAML frontmatter, speaker identification, and time milestones:
+
+```markdown
+---
+generated_at: "2026-11-08T16:48:00Z"
+source_file: "quarterly_review.mp4"
+duration: "45m 12s"
+duration_seconds: 2712.5
+repository: "marketing-engineers-gcp-audio-transcribe"
+settings:
+  model: "gemini-3.5-transcribe"
+  mode: "verbatim"
+  language: "en-US"
+  languages:
+    - "en-US"
+  diarization: true
+  speakers: "auto-detect"
+---
+
+# Transcript: quarterly_review.mp4
+
+## Part A (Chunk 1 of 2) (00:00 - 28:00)
+
+> ℹ️ **Speaker Attribution Scope:** This recording was split into 2 parts for processing. Speaker labels (e.g. `Speaker 1`, `Speaker 2`) are local to Part A and might not align with Part B, C, D, etc.
+
+Speaker 1: Good morning everyone, welcome to the quarterly business review. Today we will walk through our performance and key metrics from Q3.
+Speaker 2: Thanks. Let's start by looking at our revenue numbers and customer acquisition channels.
+
+_**[05:00]**_
+
+Speaker 1: Looking at customer acquisition cost, we observed an eighteen percent reduction compared to the previous quarter.
+Speaker 2: That's right, primarily driven by strong organic search performance and our new partner referral program.
+
+---
+
+## Part B (Chunk 2 of 2) (28:00 - 45:12)
+
+> ⚠️ **Speaker Attribution Notice:** Speaker numbers in Chunk 2 (Part B) are local to this chunk and DO NOT correspond to speaker numbers in previous chunks (Part A). Speaker labels from Part A might not align with Part B, etc.
+
+Speaker 1: That concludes our retrospective. Let's now move on to the second part of our agenda: resource allocation and technical roadmap for Q4.
+
+_**[30:00]**_
+
+Speaker 2: For next quarter, we recommend allocating dedicated cloud engineering capacity to optimize our real-time data pipelines and AI transcription workflows.
+```
+
+---
+
+## Prerequisites
+
+- Python 3.10+
+- `ffmpeg` and `ffprobe` installed on your system and accessible via the command line (e.g., `sudo apt install ffmpeg` or `brew install ffmpeg`).
+- `gcloud` CLI installed and configured (if using Vertex AI or Chirp 3).
+
+---
+
+## Quickstart
 
 ### Option A: Zero-GCP Setup (Gemini API Key)
 Get started in 2 minutes with no GCP project or cloud bucket needed:
@@ -18,7 +87,7 @@ Get started in 2 minutes with no GCP project or cloud bucket needed:
    ```
 3. Run transcription:
    ```bash
-   python -m src.main input/meeting.mp4 --lang nl-NL
+   python -m src.main input/meeting.mp4 --lang en-US
    ```
 
 ### Option B: Enterprise GCP / GCS Setup (Vertex AI & Chirp 3)
@@ -33,20 +102,9 @@ For high-volume enterprise workloads, Speech-to-Text V2, or Vertex AI:
    python -m src.main --check-auth
    ```
 
-## Data Handling & Privacy
+---
 
-- **Your Cloud, Your Data:** Audio is processed using your own Google AI Studio key or your private Google Cloud Storage (GCS) bucket.
-- **Automated Cleanup:** Audio chunks uploaded to Gemini Files API or GCS are automatically deleted in a `finally` execution block upon completion or failure.
-- **Bucket Hardening:** We recommend configuring your GCS bucket with Uniform Bucket-Level Access, Public Access Prevention, and a 7-day lifecycle deletion policy.
-- **Local Isolation:** Raw media (`input/`), intermediate audio (`output/`), generated transcripts (`transcripts/`), and local logs (`logs/`) are strictly gitignored with built-in pre-commit guardrails to prevent accidental commits of confidential data.
-
-## Prerequisites
-
-- Python 3.10+
-- `ffmpeg` and `ffprobe` installed on your system and accessible via the command line (e.g., `sudo apt install ffmpeg` or `brew install ffmpeg`).
-- `gcloud` CLI installed and configured (if using Vertex AI or Chirp 3).
-
-## Setup
+## Full Setup
 
 1. **Create and activate a virtual environment:**
    ```bash
@@ -92,43 +150,69 @@ For high-volume enterprise workloads, Speech-to-Text V2, or Vertex AI:
    cp .env.example .env
    ```
 
-    Key environment variables:
-    - `TRANSCRIPTION_MODEL` (Default: `auto`): Model routing policy (`auto`, `gemini-3.5-transcribe`, or `chirp_3`).
-    - `GEMINI_API_KEY`: API key for Gemini AI Studio.
-    - `GEMINI_BACKEND` (Default: `auto`): Backend selection (`auto`, `api_key`, or `vertex`). In `auto` mode, prefers GCP (Vertex AI) if GCP credentials are configured, falling back to Google AI Studio if only `GEMINI_API_KEY` is present.
-    - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted concurrently per wave.
-    - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED` (Default: `1680` / 28 min): Safe diarization ceiling for Gemini.
-    - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` / `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Safe ceiling for Chirp 3.
-    - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN` (Default: `3480` / 58 min): Safe plain text ceiling for Gemini verbatim mode.
-    - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART` (Default: `1200` / 20 min): Safe chunk ceiling for Gemini smart mode to prevent middle-context omission.
+   Key environment variables:
+   - `TRANSCRIPTION_MODEL` (Default: `auto`): Model routing policy (`auto`, `gemini-3.5-transcribe`, or `chirp_3`).
+   - `GEMINI_API_KEY`: API key for Gemini AI Studio.
+   - `GEMINI_BACKEND` (Default: `auto`): Backend selection (`auto`, `api_key`, or `vertex`). In `auto` mode, prefers GCP (Vertex AI) if GCP credentials are configured, falling back to Google AI Studio if only `GEMINI_API_KEY` is present.
+   - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted concurrently per wave.
+   - `TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS` (Default: `300` / 5 min): Interval for timestamp milestone markers.
+   - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED` (Default: `1680` / 28 min): Safe diarization ceiling for Gemini.
+   - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` / `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Safe ceiling for Chirp 3.
+   - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN` (Default: `3480` / 58 min): Safe plain text ceiling for Gemini verbatim mode.
+   - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART` (Default: `1200` / 20 min): Safe chunk ceiling for Gemini smart mode to prevent middle-context omission.
+
+---
 
 ## Usage
 
+### Basic Usage
 1. Place your input media file in a directory (e.g., `input/meeting.mp4`).
-
-2. Run the script via the CLI:
+2. Run transcription via the CLI:
    ```bash
-   python -m src.main input/meeting.mp4 --lang nl-NL
+   python -m src.main input/meeting.mp4 --lang en-US
    ```
 
-3. **Interactive Mode (`-i` / `--interactive`):**
-   When running in a terminal, pass `-i` for interactive prompts on language, model, or trade-offs:
-   ```bash
-   python -m src.main input/meeting.mp4 -i
-   ```
+### Interactive Mode (`-i` / `--interactive`)
+When running in a terminal, pass `-i` for guided prompts on language, model, or trade-offs:
+```bash
+python -m src.main input/meeting.mp4 -i
+```
 
-4. **CLI Flags:**
-   - `--model {auto,gemini-3.5-transcribe,chirp_3}`: Select or force a specific model.
-   - `--diarize` / `--no-diarize`: Force enable or disable speaker diarization.
-   - `--mode {verbatim,smart}`: Transcription formatting mode for Gemini plain audio.
-   - `--lang {nl-nl,en-us,en-gb,auto}`: Language code. `auto` is supported by Gemini.
-   - `--speakers <N>`: Optional speaker count hint.
-   - `--milestone-interval <N>`: Interval in seconds for timestamp milestone indicators (default: `300` / 5 minutes, set to `0` to disable).
-   - `--prepare-only`: Extract and prepare FLAC chunks without making API calls.
-   - `--from-gcs <prefix>`: Transcribe audio files already residing in GCS.
+### CLI Flags Explained
+- `--model {auto,gemini-3.5-transcribe,chirp_3}`: Select or force a specific model.
+- `--diarize` / `--no-diarize`: Force enable or disable speaker diarization.
+- `--mode {verbatim,smart}`: Transcription formatting mode for Gemini plain audio.
+- `--lang {nl-nl,en-us,en-gb,auto}`: Language code. `auto` is supported by Gemini.
+- `--speakers <N>`: Optional speaker count hint for diarization.
+- `--milestone-interval <N>`: Interval in seconds for timestamp milestone indicators (default: `300` / 5 minutes, set to `0` to disable).
+- `--prepare-only`: Extract and prepare FLAC chunks without making API calls.
+- `--from-gcs <prefix>`: Transcribe audio files already residing in GCS.
 
-5. **Agent-Friendly Non-Interactive Mode (Exit Code 2):**
-   In non-interactive environments (CI, autonomous agents), if a recording exceeds single-pass limits without explicit `--diarize`/`--no-diarize` flags, the automator exits with exit code `2` (`EXIT_DECISION_REQUIRED`) and emits a structured JSON block describing the options and exact CLI commands.
+### Agent-Friendly Non-Interactive Mode (Exit Code 2)
+In non-interactive environments (CI, autonomous agents), if a recording exceeds single-pass limits without explicit `--diarize`/`--no-diarize` flags, the automator exits with exit code `2` (`EXIT_DECISION_REQUIRED`) and emits a structured JSON block describing the options and exact CLI commands.
+
+### Transcribing Existing GCS Files (`--from-gcs`)
+If audio chunks are already uploaded to Google Cloud Storage (e.g. following a recovery or re-run scenario), you can process them directly without local re-encoding or re-uploading:
+```bash
+# Using the main entrypoint
+python -m src.main --from-gcs sample-meeting-2026-08-20_20260820_152628 --lang en-US
+
+# Or with full gs:// URI
+python -m src.main --from-gcs gs://your-transcriber-bucket/sample-meeting-2026-08-20_20260820_152628 --lang en-US
+
+# Or using the dedicated module
+python -m src.transcribe_gcs sample-meeting-2026-08-20_20260820_152628 --lang en-US
+```
+
+### Partial Run (`--prepare-only`)
+If you only want to extract and chunk the FLAC files without calling the GCP API, use the `--prepare-only` flag:
+```bash
+python -m src.main input/meeting.mp4 --lang en-US --prepare-only
+```
+
+---
+
+## Architecture
 
 ### Process Flow & Architecture
 
@@ -168,7 +252,7 @@ flowchart TD
     P --> Q["Final Artifacts Saved in transcripts/<br/>• .md: Markdown Transcript (YAML Frontmatter)<br/>• .json: Full API Metadata"]
 ```
 
-#### Functional Step Breakdown
+### Functional Step Breakdown
 
 1. **Audio Extraction & Normalization (FFmpeg):**
    - Extracts audio from compressed video or voice recording containers (`.mp4`, `.m4a`, `.mov`, `.wav`) and transcodes losslessly to FLAC.
@@ -194,56 +278,13 @@ flowchart TD
    - **Milestone Timestamps:** Rather than polluting every line with timestamps, discrete milestone markers (e.g. `_**[05:00]**_`, `_**[10:00]**_`) appear at regular intervals (default: 5 minutes / 300s, configurable via `--milestone-interval`).
    - **Multi-Chunk Boundary Indicators:** When long recordings are split into multiple chunks, each section is distinctly labeled (`## Part A (Chunk 1 of 2)`, `## Part B (Chunk 2 of 2)`) with a clear callout notice informing readers that speaker labels reset per chunk and do not correlate across parts.
 
----
-
-### Sample Transcript Output (`.md`)
-
-Transcripts are delivered as ready-to-read Markdown files (`transcripts/<basename>_<lang>_transcript.md`) complete with structured frontmatter and time anchors:
-
-```markdown
----
-generated_at: "2026-11-08T16:48:00Z"
-source_file: "quarterly_review.mp4"
-duration: "45m 12s"
-duration_seconds: 2712.5
-repository: "marketing-engineers-gcp-audio-transcribe"
-settings:
-  model: "gemini-3.5-transcribe"
-  mode: "verbatim"
-  language: "nl-NL"
-  languages:
-    - "nl-NL"
-    - "en-US"
-  diarization: true
-  speakers: "auto-detect"
----
-
-# Transcript: quarterly_review.mp4
-
-## Part A (Chunk 1 of 2) (00:00 - 28:00)
-
-> ℹ️ **Speaker Attribution Scope:** This recording was split into 2 parts for processing. Speaker labels (e.g. `Speaker 1`, `Speaker 2`) are local to Part A and might not align with Part B, C, D, etc.
-
-Speaker 1: Goedemorgen allemaal, welkom bij de kwartaalreview. We gaan vandaag de resultaten van het afgelopen kwartaal doornemen.
-Speaker 2: Dankjewel. Laten we meteen kijken naar de omzetcijfers en marketingcampagnes van Q3.
-
-_**[05:00]**_
-
-Speaker 1: Wat betreft de customer acquisition cost zien we een daling van achttien procent ten opzichte van vorig jaar.
-Speaker 2: Dat klopt, vooral de organische kanalen en referral programma's hebben zeer sterk gepresteerd.
-
----
-
-## Part B (Chunk 2 of 2) (28:00 - 45:12)
-
-> ⚠️ **Speaker Attribution Notice:** Speaker numbers in Chunk 2 (Part B) are local to this chunk and DO NOT correspond to speaker numbers in previous chunks (Part A). Speaker labels from Part A might not align with Part B, etc.
-
-Speaker 1: We zijn nu aangekomen bij het tweede deel van de meeting: de roadmap voor komend kwartaal.
-
-_**[30:00]**_
-
-Speaker 2: Voor Q4 stellen we voor om extra budget vrij te maken voor onze cloud infrastructure en transcriptie pipelines.
-```
+### Language Routes & Multilingual Code-Switching
+The pipeline automatically handles language-specific routing and code-switching:
+- **European Languages (`nl-NL`, `de-DE`, `fr-FR`, etc.):** When transcribed via Gemini 3.5 Transcribe, requests automatically configure `language_codes=[<lang>, "en-US"]`. This ensures English loanwords, acronyms, and technical terminology are preserved without mid-sentence word drops.
+- **Dynamic Language Detection (`--lang auto`):** Gemini dynamically identifies spoken languages across utterances without prior specification. If no language is provided in interactive mode, the CLI prompts for confirmation before defaulting to `auto`.
+- **Chirp 3 Route Differences:**
+  - **Dutch (`nl-NL`):** Transcribes without diarization on Chirp 3, using adaptive parallel waves (`N = TRANSCRIPTION_CONCURRENCY`, 10–45 min per chunk) for fast completion.
+  - **English (`en-US` / `en-GB`):** Transcribes with speaker diarization up to the 45-minute ceiling (`CHUNK_MAX_LENGTH_SECONDS_ENGLISH=2700`).
 
 ### Real-Time Upload Feedback & Dual Logging Architecture
 - **GCS Upload Streaming:** Large audio chunks are streamed to GCS in 2 MB resumable chunks. When running in an interactive terminal, upload progress updates in place on a single line (like `wget`/`curl`) every 5 seconds, displaying transferred megabytes, percentage, and real-time upload speed (MB/s).
@@ -252,36 +293,7 @@ Speaker 2: Voor Q4 stellen we voor om extra budget vrij te maken voor onze cloud
 ### Bounded Concurrency & Adaptive Polling
 Multi-chunk requests are submitted in bounded waves (controlled by `TRANSCRIPTION_CONCURRENCY`, default: 5) with 1-second submission spacing. Operation polling uses adaptive pre-delays and intervals scaled to expected chunk duration, with automated retry on transient `429 RESOURCE_EXHAUSTED` errors to prevent regional queue congestion and API throttling.
 
-### Transcribing Existing GCS Files (`--from-gcs`)
-If audio chunks are already uploaded to Google Cloud Storage (e.g. following a recovery or re-run scenario), you can process them directly without local re-encoding or re-uploading:
-
-```bash
-# Using the main entrypoint
-python -m src.main --from-gcs sample-meeting-2026-08-20_20260820_152628 --lang nl-NL
-
-# Or with full gs:// URI
-python -m src.main --from-gcs gs://your-transcriber-bucket/sample-meeting-2026-08-20_20260820_152628 --lang nl-NL
-
-# Or using the dedicated module
-python -m src.transcribe_gcs sample-meeting-2026-08-20_20260820_152628 --lang nl-NL
-```
-The GCS re-transcription workflow automatically discovers and sorts all audio chunks under the prefix, executes the bounded concurrency pipeline, stitches the transcripts, and saves output to `transcripts/`.
-
-### Partial Run (v0.1 Behavior)
-If you only want to extract and chunk the FLAC files without calling the GCP API, use the `--prepare-only` flag:
-```bash
-python -m src.main input/meeting.mp4 --lang en-US --prepare-only
-```
-You can then manually upload the generated FLACs from the `output/` directory.
-
-### Language Routes & Multilingual Code-Switching
-
-The pipeline automatically handles language-specific routing and code-switching:
-- **European Languages (`nl-NL`, `de-DE`, `fr-FR`, etc.):** When transcribed via Gemini 3.5 Transcribe, requests automatically configure `language_codes=[<lang>, "en-US"]`. This ensures English loanwords, acronyms, and technical terminology are preserved without mid-sentence word drops.
-- **Dynamic Language Detection (`--lang auto`):** Gemini dynamically identifies spoken languages across utterances without prior specification. If no language is provided in interactive mode, the CLI prompts for confirmation before defaulting to `auto`.
-- **Chirp 3 Route Differences:**
-  - **Dutch (`nl-NL`):** Transcribes without diarization on Chirp 3, using adaptive parallel waves (`N = TRANSCRIPTION_CONCURRENCY`, 10–45 min per chunk) for fast completion.
-  - **English (`en-US` / `en-GB`):** Transcribes with speaker diarization up to the 45-minute ceiling (`CHUNK_MAX_LENGTH_SECONDS_ENGLISH=2700`).
+---
 
 ## Project Structure
 
@@ -298,7 +310,7 @@ The pipeline automatically handles language-specific routing and code-switching:
 ├── SECURITY.md           # Security disclosure policy
 ├── input/                # (Optional) Drop raw media files here
 ├── output/               # Intermediate FLAC files appear here
-├── transcripts/          # Final generated transcripts
+├── transcripts/          # Final generated transcripts (.md and .json)
 ├── logs/                 # Rotating logs (app.log and gcp_api.log)
 ├── tests/                # Unit and integration test suite
 │   ├── test_audio.py
@@ -319,10 +331,12 @@ The pipeline automatically handles language-specific routing and code-switching:
     ├── transcribe.py      # Speech-to-Text V2 BatchRecognize logic
     ├── transcribe_gcs.py  # Direct GCS audio transcription & recovery
     ├── transcribe_gemini.py # Gemini 3.5 Transcribe integration
-    └── transcript_output.py # Transcript formatting and stitching
+    └── transcript_output.py # Transcript formatting, frontmatter, and stitching
 ```
 
-## Roadmap & Future Scope (v0.4+)
+---
+
+## Ideas for Future Development (Roadmap & Future Scope)
 
 - **Cross-Chunk Speaker Reconciliation (`gemini-3.6-flash`)**:
   - Pass GCS audio chunk URIs directly to `gemini-3.6-flash` via Vertex AI / Google GenAI SDK to analyze cross-chunk vocal profiles.
@@ -330,6 +344,8 @@ The pipeline automatically handles language-specific routing and code-switching:
 - **Automatic LLM Summarization Pipeline**: Summarize stitched transcripts natively via Gemini.
 - **Denoiser Toggle**: FFmpeg noise reduction for phone recordings.
 - **Model Adaptation**: Domain-specific vocabulary hints.
+
+---
 
 ## License
 
