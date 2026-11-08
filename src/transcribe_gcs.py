@@ -172,7 +172,7 @@ def transcribe_from_gcs(
         if diarize is not None:
             effective_diarize = diarize
         else:
-            effective_diarize = (lang_lower in LANGUAGE_CODES_ENGLISH)
+            effective_diarize = (lang_lower in LANGUAGE_CODES_ENGLISH) or (effective_model == "gemini-3.5-transcribe")
 
     if effective_model == "chirp_3":
         if lang_lower in LANGUAGE_CODES_DUTCH and effective_diarize:

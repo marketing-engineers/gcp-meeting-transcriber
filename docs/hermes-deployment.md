@@ -58,7 +58,7 @@ Note the resulting service account email (e.g., `hermes-transcriber@${PROJECT_ID
        --project=$PROJECT_ID \
        --title="Hermes Transcriber Speech & Vertex" \
        --description="Minimal permissions for Speech-to-Text V2 and Vertex AI Gemini Transcribe" \
-       --permissions="speech.recognizers.recognize,speech.operations.get,serviceusage.services.use,aiplatform.endpoints.predict" \
+       --permissions="speech.recognizers.recognize,speech.operations.get,serviceusage.services.use,aiplatform.endpoints.predict,aiplatform.models.list" \
        --stage="GA"
 
    gcloud projects add-iam-policy-binding $PROJECT_ID \

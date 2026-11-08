@@ -246,7 +246,7 @@ def _responses_to_dict(
                 d = {k: v for k, v in r.__dict__.items() if not k.startswith("_")}
                 json.dumps(d, default=str)
                 converted.append(d)
-            except Exception:
+                converted.append(json.loads(json.dumps(d, default=str)))
                 converted.append({"output_text": getattr(r, "output_text", str(r))})
         else:
             converted.append({"output_text": str(r)})
@@ -268,7 +268,7 @@ def normalize_speaker_label(label: Any) -> str:
     m_spk = re.match(r"^spk_?(\d+)$", label_str, re.I)
     if m_spk:
         num = int(m_spk.group(1))
-        return f"Speaker {num if num > 0 else 1}"
+        return f"Speaker {num}"
 
     m_speaker = re.match(r"^Speaker\s*(\d+)$", label_str, re.I)
     if m_speaker:
@@ -504,7 +504,7 @@ def format_gemini_plain_transcript(
     elif isinstance(response, dict) and "candidates" in response:
         parts_texts = []
         for cand in response.get("candidates", []):
-            content = cand.get("content", {})
+            content = cand.get("content") or {}
             for p in content.get("parts", []):
                 t = p.get("text", "")
                 if t:
