@@ -256,7 +256,8 @@ def normalize_speaker_label(label: Any) -> str:
     """
     Normalizes a speaker label to a standard 'Speaker X' format.
     Handles 'spk_1', 'spk_01', 'spk_0', 'spk:0', 'spk:1', '1', 1, 'Speaker 1', etc.
-    0-based speaker tags (e.g., 'spk:0', 'spk_0', 0) are converted to 1-based (Speaker 1).
+    0-based speaker tags (e.g. 'spk:0', 'spk_0') use colon or explicit 0 to convert to 1-based (num + 1).
+    1-based tags (e.g. 'spk_1', 'spk_2', 'Speaker 1', '1') preserve their 1-based indices (1, 2, ...).
     """
     if label is None:
         return "Speaker 1"
@@ -265,10 +266,16 @@ def normalize_speaker_label(label: Any) -> str:
     if not label_str:
         return "Speaker 1"
 
-    m_spk = re.match(r"^spk[_:]?(\d+)$", label_str, re.I)
+    # Colon delimiter 'spk:X' is specifically used by Vertex AI 0-indexed tags (spk:0, spk:1, etc.)
+    m_spk_colon = re.match(r"^spk:(\d+)$", label_str, re.I)
+    if m_spk_colon:
+        num = int(m_spk_colon.group(1))
+        return f"Speaker {num + 1}"
+
+    m_spk = re.match(r"^spk_?(\d+)$", label_str, re.I)
     if m_spk:
         num = int(m_spk.group(1))
-        # 0-based tags like spk:0 or spk_0 offset to Speaker 1
+        # 0-based tag like spk_0 offsets to 1
         speaker_idx = num + 1 if num == 0 else num
         return f"Speaker {speaker_idx}"
 

@@ -26,13 +26,15 @@ class TestNormalizeSpeakerLabel:
     """Tests for speaker label normalization."""
 
     def test_spk_tags(self):
+        # AI Studio 1-based underscore tags
         assert normalize_speaker_label("spk_1") == "Speaker 1"
         assert normalize_speaker_label("spk_2") == "Speaker 2"
         assert normalize_speaker_label("spk_01") == "Speaker 1"
         assert normalize_speaker_label("spk_0") == "Speaker 1"
+        # Vertex AI 0-based colon tags: 0 -> Speaker 1, 1 -> Speaker 2, 2 -> Speaker 3
         assert normalize_speaker_label("spk:0") == "Speaker 1"
-        assert normalize_speaker_label("spk:1") == "Speaker 1"
-        assert normalize_speaker_label("spk:2") == "Speaker 2"
+        assert normalize_speaker_label("spk:1") == "Speaker 2"
+        assert normalize_speaker_label("spk:2") == "Speaker 3"
 
     def test_speaker_tags(self):
         assert normalize_speaker_label("Speaker 1") == "Speaker 1"
