@@ -177,23 +177,36 @@ def get_credentials() -> google.auth.credentials.Credentials | None:
     return _credentials
 
 
+def get_gemini_backend_mode() -> str:
+    """
+    Resolves the active backend mode for Gemini 3.5 Transcribe.
+    Returns:
+        'api_key' if GEMINI_BACKEND == 'api_key' or
+                  (GEMINI_BACKEND == 'auto' and GEMINI_API_KEY is set and GCP_PROJECT_ID is unset).
+        'vertex'  if GCP_PROJECT_ID is configured and GEMINI_BACKEND in ('auto', 'vertex').
+        Defaults to 'api_key'.
+    """
+    from src.config import GCP_PROJECT_ID, GEMINI_API_KEY, GEMINI_BACKEND
+
+    if GEMINI_BACKEND == "api_key":
+        return "api_key"
+    if GEMINI_BACKEND == "vertex":
+        return "vertex"
+    # GEMINI_BACKEND == "auto"
+    if GCP_PROJECT_ID:
+        return "vertex"
+    if GEMINI_API_KEY:
+        return "api_key"
+    return "api_key"
+
+
 def check_auth() -> bool:
     """
-    Validates GCP credentials, configuration, and permissions for the transcription pipeline.
-
-    Checks:
-        1. Validates GCP configuration variables.
-        2. Initializes GCS client and Speech-to-Text client.
-        3. Tests GCS bucket permissions via testIamPermissions:
-           - storage.objects.create
-           - storage.objects.get
-           - storage.objects.list
-           - storage.objects.delete
-        4. Verifies GCS list_blobs(max_results=1).
-        5. Reports Speech client initialization (Speech API has no testIamPermissions).
+    Validates credentials, configuration, and permissions for whichever transcription
+    backends are configured (GEMINI_API_KEY, GCP Speech V2 + GCS, and/or Vertex AI).
 
     Returns:
-        True if all checks pass, False otherwise.
+        True if all configured backends pass, False otherwise.
     """
     from src.config import (
         GCP_AUTH_MODE,
@@ -201,85 +214,128 @@ def check_auth() -> bool:
         GCP_PROJECT_ID,
         GCP_REGION,
         GCS_BUCKET_NAME,
+        GEMINI_API_KEY,
+        GEMINI_BACKEND,
+        validate_backend_config,
         validate_gcp_config,
     )
     from src.gcs import _get_client
     from src.transcribe import _get_speech_client
 
-    try:
-        validate_gcp_config()
-    except Exception as e:
-        logger.error("Configuration validation failed: %s", e)
-        return False
+    has_gemini_key = bool(GEMINI_API_KEY)
+    has_gcp = bool(GCP_PROJECT_ID or GCS_BUCKET_NAME)
 
-    principal = (
-        GCP_EXPECTED_SERVICE_ACCOUNT
-        if GCP_AUTH_MODE == "service_account_key"
-        else "user ADC"
-    )
-
-    logger.info("=== GCP Authentication & Permissions Check ===")
-    logger.info("  Auth Mode: %s", GCP_AUTH_MODE)
-    logger.info("  Principal: %s", principal)
-    logger.info("  Project:   %s", GCP_PROJECT_ID)
-    logger.info("  Bucket:    %s", GCS_BUCKET_NAME)
-    logger.info("  Region:    %s", GCP_REGION)
-
-    try:
-        gcs_client = _get_client()
-        logger.info("GCS client initialized successfully.")
-    except Exception as e:
-        logger.error("Failed to initialize GCS client: %s", e)
-        return False
-
-    try:
-        speech_client = _get_speech_client(GCP_REGION)
-        logger.info(
-            "Speech-to-Text client initialized successfully for region '%s' (projects/%s/locations/%s/recognizers/_).",
-            GCP_REGION,
-            GCP_PROJECT_ID,
-            GCP_REGION,
-        )
-    except Exception as e:
-        logger.error("Failed to initialize Speech-to-Text client: %s", e)
-        return False
-
-    required_permissions = [
-        "storage.objects.create",
-        "storage.objects.get",
-        "storage.objects.list",
-        "storage.objects.delete",
-    ]
-
-    try:
-        bucket = gcs_client.bucket(GCS_BUCKET_NAME)
-        held_permissions = bucket.test_iam_permissions(required_permissions)
-        missing_permissions = set(required_permissions) - set(held_permissions)
-        if missing_permissions:
-            logger.error(
-                "Missing required GCS object permissions on bucket '%s': %s",
-                GCS_BUCKET_NAME,
-                ", ".join(sorted(missing_permissions)),
-            )
+    if not has_gemini_key and not has_gcp:
+        try:
+            validate_backend_config()
+        except Exception as e:
+            logger.error("Configuration validation failed: %s", e)
             return False
 
-        logger.info(
-            "GCS bucket '%s' IAM permissions verified: all %d required permissions held.",
-            GCS_BUCKET_NAME,
-            len(required_permissions),
+    all_passed = True
+
+    if has_gemini_key:
+        logger.info("=== Gemini API (AI Studio) Authentication Check ===")
+        try:
+            from google import genai
+
+            _ = genai.Client(api_key=GEMINI_API_KEY)
+            logger.info("  Gemini API client initialized successfully with GEMINI_API_KEY.")
+            logger.info("=== Gemini API Authentication Check PASSED ===")
+        except Exception as e:
+            logger.error("Failed to initialize Gemini API client: %s", e)
+            all_passed = False
+
+    if has_gcp or not has_gemini_key:
+        try:
+            validate_gcp_config()
+        except Exception as e:
+            logger.error("GCP configuration validation failed: %s", e)
+            return False
+
+        principal = (
+            GCP_EXPECTED_SERVICE_ACCOUNT
+            if GCP_AUTH_MODE == "service_account_key"
+            else "user ADC"
         )
 
-        list(bucket.list_blobs(max_results=1))
-        logger.info("GCS bucket '%s' list_blobs check succeeded.", GCS_BUCKET_NAME)
-    except Exception as e:
-        logger.error("Failed verifying GCS bucket '%s': %s", GCS_BUCKET_NAME, e)
-        return False
+        logger.info("=== GCP Authentication & Permissions Check ===")
+        logger.info("  Auth Mode: %s", GCP_AUTH_MODE)
+        logger.info("  Principal: %s", principal)
+        logger.info("  Project:   %s", GCP_PROJECT_ID)
+        logger.info("  Bucket:    %s", GCS_BUCKET_NAME)
+        logger.info("  Region:    %s", GCP_REGION)
 
-    logger.info(
-        "Note: Speech-to-Text V2 does not support testIamPermissions. "
-        "The first transcription job will validate Speech API permissions "
-        "('speech.recognizers.recognize', 'speech.operations.get', 'serviceusage.services.use')."
-    )
-    logger.info("=== GCP Authentication Check PASSED ===")
-    return True
+        try:
+            gcs_client = _get_client()
+            logger.info("GCS client initialized successfully.")
+        except Exception as e:
+            logger.error("Failed to initialize GCS client: %s", e)
+            return False
+
+        try:
+            speech_client = _get_speech_client(GCP_REGION)
+            logger.info(
+                "Speech-to-Text client initialized successfully for region '%s' (projects/%s/locations/%s/recognizers/_).",
+                GCP_REGION,
+                GCP_PROJECT_ID,
+                GCP_REGION,
+            )
+        except Exception as e:
+            logger.error("Failed to initialize Speech-to-Text client: %s", e)
+            return False
+
+        required_permissions = [
+            "storage.objects.create",
+            "storage.objects.get",
+            "storage.objects.list",
+            "storage.objects.delete",
+        ]
+
+        try:
+            bucket = gcs_client.bucket(GCS_BUCKET_NAME)
+            held_permissions = bucket.test_iam_permissions(required_permissions)
+            missing_permissions = set(required_permissions) - set(held_permissions)
+            if missing_permissions:
+                logger.error(
+                    "Missing required GCS object permissions on bucket '%s': %s",
+                    GCS_BUCKET_NAME,
+                    ", ".join(sorted(missing_permissions)),
+                )
+                return False
+
+            logger.info(
+                "GCS bucket '%s' IAM permissions verified: all %d required permissions held.",
+                GCS_BUCKET_NAME,
+                len(required_permissions),
+            )
+
+            list(bucket.list_blobs(max_results=1))
+            logger.info("GCS bucket '%s' list_blobs check succeeded.", GCS_BUCKET_NAME)
+        except Exception as e:
+            logger.error("Failed verifying GCS bucket '%s': %s", GCS_BUCKET_NAME, e)
+            return False
+
+        if GEMINI_BACKEND in ("auto", "vertex"):
+            try:
+                from google import genai
+
+                _ = genai.Client(
+                    vertexai=True,
+                    project=GCP_PROJECT_ID,
+                    location=GCP_REGION,
+                    credentials=get_credentials(),
+                )
+                logger.info("Gemini Vertex AI client initialized successfully.")
+            except Exception as e:
+                logger.warning("Vertex AI client initialization check notice: %s", e)
+
+        logger.info(
+            "Note: Speech-to-Text V2 does not support testIamPermissions. "
+            "The first transcription job will validate Speech API permissions "
+            "('speech.recognizers.recognize', 'speech.operations.get', 'serviceusage.services.use')."
+        )
+        logger.info("=== GCP Authentication Check PASSED ===")
+
+    return all_passed
 

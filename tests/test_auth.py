@@ -263,3 +263,31 @@ class TestCheckAuth:
     def test_check_auth_invalid_config(self, mock_val):
         """check_auth returns False if configuration is invalid."""
         assert check_auth() is False
+
+    def test_get_gemini_backend_mode(self):
+        """get_gemini_backend_mode correctly resolves backend modes."""
+        from src.auth import get_gemini_backend_mode
+
+        with patch("src.config.GEMINI_BACKEND", "api_key"):
+            assert get_gemini_backend_mode() == "api_key"
+
+        with patch("src.config.GEMINI_BACKEND", "vertex"):
+            assert get_gemini_backend_mode() == "vertex"
+
+        with patch("src.config.GEMINI_BACKEND", "auto"), \
+             patch("src.config.GCP_PROJECT_ID", "my-project"):
+            assert get_gemini_backend_mode() == "vertex"
+
+        with patch("src.config.GEMINI_BACKEND", "auto"), \
+             patch("src.config.GCP_PROJECT_ID", None), \
+             patch("src.config.GEMINI_API_KEY", "test-key"):
+            assert get_gemini_backend_mode() == "api_key"
+
+    @patch("google.genai.Client")
+    def test_check_auth_gemini_api_key_only(self, mock_genai_client):
+        """check_auth returns True when only GEMINI_API_KEY is configured and valid."""
+        with patch("src.config.GEMINI_API_KEY", "valid-key"), \
+             patch("src.config.GCP_PROJECT_ID", None), \
+             patch("src.config.GCS_BUCKET_NAME", None):
+            assert check_auth() is True
+        mock_genai_client.assert_called_once_with(api_key="valid-key")
