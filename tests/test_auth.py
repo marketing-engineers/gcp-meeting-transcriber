@@ -286,8 +286,54 @@ class TestCheckAuth:
     @patch("google.genai.Client")
     def test_check_auth_gemini_api_key_only(self, mock_genai_client):
         """check_auth returns True when only GEMINI_API_KEY is configured and valid."""
+        mock_instance = MagicMock()
+        mock_instance.models.list.return_value = [MagicMock()]
+        mock_genai_client.return_value = mock_instance
+
         with patch("src.config.GEMINI_API_KEY", "valid-key"), \
              patch("src.config.GCP_PROJECT_ID", None), \
              patch("src.config.GCS_BUCKET_NAME", None):
             assert check_auth() is True
         mock_genai_client.assert_called_once_with(api_key="valid-key")
+
+    @patch("src.gcs._get_client")
+    @patch("src.transcribe._get_speech_client")
+    def test_check_auth_speech_service_disabled(self, mock_get_speech, mock_get_gcs):
+        """check_auth returns False when Speech-to-Text V2 API is disabled."""
+        mock_gcs = MagicMock()
+        mock_get_gcs.return_value = mock_gcs
+        mock_speech = MagicMock()
+        mock_speech.list_recognizers.side_effect = Exception("403 SERVICE_DISABLED: speech.googleapis.com is disabled")
+        mock_get_speech.return_value = mock_speech
+
+        with patch("src.config.GCP_AUTH_MODE", "adc"), \
+             patch("src.config.GCP_PROJECT_ID", "test-project"), \
+             patch("src.config.GCS_BUCKET_NAME", "test-bucket"):
+            assert check_auth() is False
+
+    @patch("src.gcs._get_client")
+    @patch("src.transcribe._get_speech_client")
+    @patch("google.genai.Client")
+    def test_check_auth_vertex_service_disabled(self, mock_genai, mock_get_speech, mock_get_gcs):
+        """check_auth returns False when Vertex AI API is disabled in vertex mode."""
+        mock_gcs = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.test_iam_permissions.return_value = [
+            "storage.objects.create", "storage.objects.get", "storage.objects.list", "storage.objects.delete"
+        ]
+        mock_gcs.bucket.return_value = mock_bucket
+        mock_get_gcs.return_value = mock_gcs
+
+        mock_speech = MagicMock()
+        mock_speech.list_recognizers.return_value = []
+        mock_get_speech.return_value = mock_speech
+
+        mock_vertex = MagicMock()
+        mock_vertex.models.list.side_effect = Exception("403 SERVICE_DISABLED: aiplatform.googleapis.com is disabled")
+        mock_genai.return_value = mock_vertex
+
+        with patch("src.config.GCP_AUTH_MODE", "adc"), \
+             patch("src.config.GCP_PROJECT_ID", "test-project"), \
+             patch("src.config.GCS_BUCKET_NAME", "test-bucket"), \
+             patch("src.config.GEMINI_BACKEND", "vertex"):
+            assert check_auth() is False

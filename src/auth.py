@@ -239,8 +239,12 @@ def check_auth() -> bool:
         try:
             from google import genai
 
-            _ = genai.Client(api_key=GEMINI_API_KEY)
-            logger.info("  Gemini API client initialized successfully with GEMINI_API_KEY.")
+            ai_client = genai.Client(api_key=GEMINI_API_KEY)
+            try:
+                _ = list(ai_client.models.list(config={"page_size": 1}))
+                logger.info("  Gemini API (AI Studio) key validated and active.")
+            except Exception as ping_err:
+                logger.warning("  Gemini API key ping note: %s", ping_err)
             logger.info("=== Gemini API Authentication Check PASSED ===")
         except Exception as e:
             logger.error("Failed to initialize Gemini API client: %s", e)
@@ -281,6 +285,27 @@ def check_auth() -> bool:
                 GCP_PROJECT_ID,
                 GCP_REGION,
             )
+            # Active check to verify speech.googleapis.com is enabled
+            try:
+                _ = list(
+                    speech_client.list_recognizers(
+                        parent=f"projects/{GCP_PROJECT_ID}/locations/{GCP_REGION}",
+                        page_size=1,
+                    )
+                )
+                logger.info("Speech-to-Text V2 API (speech.googleapis.com) verified active.")
+            except Exception as api_err:
+                err_str = str(api_err)
+                if "SERVICE_DISABLED" in err_str or "speech.googleapis.com" in err_str:
+                    logger.error(
+                        "Speech-to-Text V2 API (speech.googleapis.com) is disabled on project '%s'.\n"
+                        "Enable it with: gcloud services enable speech.googleapis.com --project=%s",
+                        GCP_PROJECT_ID,
+                        GCP_PROJECT_ID,
+                    )
+                    return False
+                else:
+                    logger.info("Speech-to-Text API connectivity confirmed (notice: %s).", api_err)
         except Exception as e:
             logger.error("Failed to initialize Speech-to-Text client: %s", e)
             return False
@@ -320,26 +345,56 @@ def check_auth() -> bool:
             try:
                 from google import genai
 
-                _ = genai.Client(
+                vertex_client = genai.Client(
                     vertexai=True,
                     project=GCP_PROJECT_ID,
                     location=GCP_REGION,
                     credentials=get_credentials(),
                 )
                 logger.info("Gemini Vertex AI client initialized successfully.")
-                logger.info(
-                    "Note for Vertex AI: Ensure 'aiplatform.googleapis.com' is enabled on project '%s' "
-                    "and the service account has 'aiplatform.endpoints.predict' (or role 'roles/aiplatform.user'). "
-                    "Alternatively, set GEMINI_API_KEY in .env for zero-GCP AI Studio setup.",
-                    GCP_PROJECT_ID,
-                )
+
+                # Active API check to verify aiplatform.googleapis.com is enabled
+                try:
+                    _ = list(vertex_client.models.list(config={"page_size": 1}))
+                    logger.info("Gemini Vertex AI API (aiplatform.googleapis.com) verified active.")
+                except Exception as vertex_err:
+                    err_str = str(vertex_err)
+                    if "aiplatform.googleapis.com" in err_str or "SERVICE_DISABLED" in err_str:
+                        msg = (
+                            f"Vertex AI API (aiplatform.googleapis.com) is disabled on project '{GCP_PROJECT_ID}'.\n"
+                            f"Remediation:\n"
+                            f"  1. Enable it with: gcloud services enable aiplatform.googleapis.com --project={GCP_PROJECT_ID}\n"
+                            f"  2. Or if using Google AI Studio, configure GEMINI_API_KEY in .env and set GEMINI_BACKEND=api_key."
+                        )
+                        if GEMINI_BACKEND == "vertex":
+                            logger.error("%s", msg)
+                            return False
+                        elif not has_gemini_key:
+                            logger.error("%s", msg)
+                            all_passed = False
+                        else:
+                            logger.warning(
+                                "Vertex AI check note (fallback available via GEMINI_API_KEY): %s",
+                                vertex_err,
+                            )
+                    elif "PERMISSION_DENIED" in err_str or "403" in err_str:
+                        msg = (
+                            f"Vertex AI permission check failed for project '{GCP_PROJECT_ID}': {vertex_err}\n"
+                            f"Ensure service account has 'aiplatform.endpoints.predict' (or role 'roles/aiplatform.user')."
+                        )
+                        if GEMINI_BACKEND == "vertex" or not has_gemini_key:
+                            logger.error("%s", msg)
+                            all_passed = False
+                        else:
+                            logger.warning("%s", msg)
+                    else:
+                        logger.warning("Vertex AI API check note: %s", vertex_err)
             except Exception as e:
                 logger.warning("Vertex AI client initialization check notice: %s", e)
 
         logger.info(
-            "Note: Speech-to-Text V2 does not support testIamPermissions. "
-            "The first transcription job will validate Speech API permissions "
-            "('speech.recognizers.recognize', 'speech.operations.get', 'serviceusage.services.use')."
+            "Note: The first transcription job will validate specific model execution permissions "
+            "('speech.recognizers.recognize' for Chirp, 'aiplatform.endpoints.predict' for Vertex AI)."
         )
         logger.info("=== GCP Authentication Check PASSED ===")
 
