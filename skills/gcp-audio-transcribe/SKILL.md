@@ -67,8 +67,8 @@ When processing audio recordings that exceed single-pass thresholds without expl
 ## Output Delivery & Post-Processing Guidelines
 
 ### 1. Deliver as File Attachment (Required)
-- **Send File Attachment:** Once transcription finishes, the primary deliverable is the generated transcript file: `transcripts/<basename>_<lang>_transcript.txt`.
-- When attachments/file uploads are supported by the messaging platform or agent environment, the agent **MUST send this `.txt` file as an attachment** immediately.
+- **Send File Attachment:** Once transcription finishes, the primary deliverable is the generated transcript file: `transcripts/<basename>_<lang>_transcript.md`.
+- When attachments/file uploads are supported by the messaging platform or agent environment, the agent **MUST send this `.md` file as an attachment** immediately.
 - **Do NOT Paste Full Transcripts in Chat:** The agent must never dump the raw or full transcript text directly into chat messages. Dumping large transcripts causes message truncation, token bloat, formatting issues, and accidental hallucination. Only provide a concise status message confirming completion (e.g., output file location, language processed).
 
 ### 2. No Autonomous Post-Processing (Strict Guardrail)

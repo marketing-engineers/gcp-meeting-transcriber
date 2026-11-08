@@ -30,7 +30,7 @@ git diff --cached --name-only -z | while IFS= read -r -d '' file; do
 
     # Rule 2: Media and transcript artifact extensions anywhere in the repo
     case "$file" in
-        *.m4a|*.mp4|*.mov|*.mkv|*.wav|*.flac|*.aac|*.ogg|*.webm|*_raw.json|*_transcript.txt|*.log)
+        *.m4a|*.mp4|*.mov|*.mkv|*.wav|*.flac|*.aac|*.ogg|*.webm|*_raw.json|*_transcript.txt|*_transcript.md|*.log)
             printf "${RED}[ERROR] Disallowed file type staged: %s${NC}\n" "$file"
             printf "       Media, raw JSON outputs, transcripts, and log files must never be committed.\n"
             printf "       Remediation: git restore --staged \"%s\"\n" "$file"
