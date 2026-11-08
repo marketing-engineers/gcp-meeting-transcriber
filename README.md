@@ -81,6 +81,10 @@ For high-volume enterprise workloads, Speech-to-Text V2, or Vertex AI:
      ```bash
      python -m src.main --check-auth
      ```
+   *Note on GCP APIs:*
+   - If using Chirp 3: ensure `speech.googleapis.com` is enabled.
+   - If using Vertex AI (`GEMINI_BACKEND=vertex` or `auto`): ensure `aiplatform.googleapis.com` is enabled and your principal has `aiplatform.endpoints.predict` (`roles/aiplatform.user`).
+   - If you see `403 PERMISSION_DENIED (SERVICE_DISABLED)` for `aiplatform.googleapis.com`, run `gcloud services enable aiplatform.googleapis.com`, or switch to `GEMINI_BACKEND=api_key` with a `GEMINI_API_KEY` from Google AI Studio.
 
 5. **Configure environment variables:**
    Copy the example file and adjust as needed:

@@ -206,6 +206,16 @@ def transcribe_gemini_file(
                 continue
             if isinstance(e, ProcessingError):
                 raise
+            err_str = str(e)
+            if "aiplatform.googleapis.com" in err_str or ("403" in err_str and "PERMISSION_DENIED" in err_str):
+                raise ProcessingError(
+                    f"Gemini Vertex AI transcription failed: {e}\n\n"
+                    "Remediation Guidance:\n"
+                    f"1. Enable the Vertex AI API on project '{GCP_PROJECT_ID}':\n"
+                    f"   gcloud services enable aiplatform.googleapis.com --project={GCP_PROJECT_ID}\n"
+                    "2. Ensure your service account has 'aiplatform.endpoints.predict' (or role 'roles/aiplatform.user').\n"
+                    "3. Alternatively, switch to Google AI Studio by setting GEMINI_API_KEY in .env and GEMINI_BACKEND=api_key."
+                ) from e
             raise ProcessingError(
                 f"Gemini transcription failed for {audio_path_or_uri}.\nOriginal error: {e}"
             ) from e

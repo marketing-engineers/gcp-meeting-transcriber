@@ -104,6 +104,10 @@ When processing audio recordings that exceed single-pass thresholds without expl
    - NEVER modify `GCP_AUTH_MODE` or attempt to switch authentication back to user ADC.
 
 5. **Handling Failures:**
-   - If `--check-auth` fails or an API call returns `PermissionDenied`, immediately stop execution and report the error message back to the human operator.
-   - Do not attempt workarounds or credential modifications.
+   - If `--check-auth` fails or an API call returns `PermissionDenied`, immediately stop execution and report the error message back to the human operator. Do not attempt workarounds or credential modifications.
+   - **Service Disabled (`aiplatform.googleapis.com`):** If Gemini transcription fails with `403 PERMISSION_DENIED (SERVICE_DISABLED)` for `aiplatform.googleapis.com`:
+     - Explain to the human operator that they can resolve it via:
+       - **Route A (Vertex AI):** Run `gcloud services enable aiplatform.googleapis.com --project=<PROJECT_ID>` and ensure the service account has `aiplatform.endpoints.predict` (see `docs/hermes-deployment.md`).
+       - **Route B (Google AI Studio):** Set `GEMINI_API_KEY=your_key` and `GEMINI_BACKEND=api_key` in `.env` to route through AI Studio without needing Vertex AI or GCP IAM adjustments.
+     - Never attempt to run `gcloud services enable` or `gcloud iam` commands autonomously.
 

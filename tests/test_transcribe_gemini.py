@@ -218,6 +218,27 @@ class TestTranscribeGeminiFile:
         assert len(call_kwargs["contents"]) == 1
         assert call_kwargs["config"].audio_transcription_config.diarization is True
 
+    def test_vertex_ai_service_disabled_remediation_guidance(self):
+        """Verifies 403 / aiplatform.googleapis.com errors return actionable remediation guidance."""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = Exception(
+            "403 PERMISSION_DENIED: Agent Platform API (aiplatform.googleapis.com) has not been used..."
+        )
+
+        with pytest.raises(ProcessingError, match="Remediation Guidance") as exc_info:
+            transcribe_gemini_file(
+                audio_path_or_uri="gs://test-bucket/prefix/audio.flac",
+                lang="nl-NL",
+                diarize=True,
+                backend="vertex",
+                client=mock_client,
+            )
+
+        err_msg = str(exc_info.value)
+        assert "gcloud services enable aiplatform.googleapis.com" in err_msg
+        assert "aiplatform.endpoints.predict" in err_msg
+        assert "GEMINI_API_KEY" in err_msg
+
 
 class TestTranscribeGeminiFilesConcurrency:
     """Tests for multi-chunk execution in transcribe_gemini_files."""

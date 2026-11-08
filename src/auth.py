@@ -327,6 +327,12 @@ def check_auth() -> bool:
                     credentials=get_credentials(),
                 )
                 logger.info("Gemini Vertex AI client initialized successfully.")
+                logger.info(
+                    "Note for Vertex AI: Ensure 'aiplatform.googleapis.com' is enabled on project '%s' "
+                    "and the service account has 'aiplatform.endpoints.predict' (or role 'roles/aiplatform.user'). "
+                    "Alternatively, set GEMINI_API_KEY in .env for zero-GCP AI Studio setup.",
+                    GCP_PROJECT_ID,
+                )
             except Exception as e:
                 logger.warning("Vertex AI client initialization check notice: %s", e)
 
