@@ -227,8 +227,303 @@ def _extract_results_from_response(
     return all_results
 
 
+def _responses_to_dict(
+    responses: list[Any],
+) -> list[dict[str, Any]]:
+    """Convert responses (protobuf, Pydantic, dict, or Interaction) to serializable dicts."""
+    converted: list[dict[str, Any]] = []
+    for r in responses:
+        if hasattr(r, "_pb"):
+            converted.append(MessageToDict(r._pb))
+        elif hasattr(r, "model_dump"):
+            converted.append(r.model_dump(mode="json"))
+        elif hasattr(r, "to_dict") and callable(r.to_dict):
+            converted.append(r.to_dict())
+        elif isinstance(r, dict):
+            converted.append(r)
+        elif hasattr(r, "__dict__"):
+            try:
+                d = {k: v for k, v in r.__dict__.items() if not k.startswith("_")}
+                json.dumps(d, default=str)
+                converted.append(d)
+            except Exception:
+                converted.append({"output_text": getattr(r, "output_text", str(r))})
+        else:
+            converted.append({"output_text": str(r)})
+    return converted
+
+
+def normalize_speaker_label(label: Any) -> str:
+    """
+    Normalizes a speaker label to a standard 'Speaker X' format.
+    Handles 'spk_1', 'spk_01', '1', 1, 'Speaker 1', etc.
+    """
+    if label is None:
+        return "Speaker 1"
+
+    label_str = str(label).strip()
+    if not label_str:
+        return "Speaker 1"
+
+    m_spk = re.match(r"^spk_?(\d+)$", label_str, re.I)
+    if m_spk:
+        num = int(m_spk.group(1))
+        return f"Speaker {num if num > 0 else 1}"
+
+    m_speaker = re.match(r"^Speaker\s*(\d+)$", label_str, re.I)
+    if m_speaker:
+        return f"Speaker {int(m_speaker.group(1))}"
+
+    if label_str.isdigit():
+        return f"Speaker {int(label_str)}"
+
+    return label_str
+
+
+def format_smart_transcript(
+    text: str,
+    max_chars_per_line: int = TRANSCRIPTION_MAX_CHARS_PER_LINE,
+) -> str:
+    """
+    Formats smart transcription text while preserving structured markdown
+    (bullets, numbered lists, headings) and applying line-length wrapping to paragraphs.
+    """
+    if not text or not text.strip():
+        return ""
+
+    raw_blocks = text.strip().split("\n")
+    formatted_lines: list[str] = []
+
+    for line in raw_blocks:
+        stripped = line.strip()
+        if not stripped:
+            formatted_lines.append("")
+            continue
+
+        list_match = re.match(r"^([*+-]|\d+\.)\s+(.*)$", stripped)
+        if list_match:
+            prefix = list_match.group(1) + " "
+            item_text = list_match.group(2)
+            if len(stripped) <= max_chars_per_line:
+                formatted_lines.append(stripped)
+            else:
+                wrapped = format_transcript_lines(item_text, max_chars_per_line=max(30, max_chars_per_line - len(prefix)))
+                wrapped_lines = wrapped.split("\n")
+                formatted_lines.append(f"{prefix}{wrapped_lines[0]}")
+                indent = " " * len(prefix)
+                for wl in wrapped_lines[1:]:
+                    formatted_lines.append(f"{indent}{wl}")
+        elif stripped.startswith("#"):
+            formatted_lines.append(stripped)
+        else:
+            if len(stripped) <= max_chars_per_line:
+                formatted_lines.append(stripped)
+            else:
+                formatted_lines.append(format_transcript_lines(stripped, max_chars_per_line=max_chars_per_line))
+
+    result_lines: list[str] = []
+    consecutive_empty = 0
+    for line in formatted_lines:
+        if not line:
+            consecutive_empty += 1
+            if consecutive_empty <= 1:
+                result_lines.append(line)
+        else:
+            consecutive_empty = 0
+            result_lines.append(line)
+
+    return "\n".join(result_lines)
+
+
+def format_gemini_diarized_transcript(
+    response: Any,
+    max_chars_per_line: int = TRANSCRIPTION_MAX_CHARS_PER_LINE,
+    max_sentences_per_line: int = TRANSCRIPTION_MAX_SENTENCES_PER_LINE,
+) -> str:
+    """
+    Processes a Gemini transcription response with diarization into standard speaker turns:
+        Speaker 1: ...
+        Speaker 2: ...
+    """
+    if not response:
+        return ""
+
+    turns: list[tuple[str, list[str]]] = []
+
+    candidates = getattr(response, "candidates", None)
+    if candidates is None and isinstance(response, dict):
+        candidates = response.get("candidates")
+
+    if candidates and len(candidates) > 0:
+        candidate = candidates[0]
+        content = getattr(candidate, "content", None)
+        if content is None and isinstance(candidate, dict):
+            content = candidate.get("content")
+
+        parts = getattr(content, "parts", None)
+        if parts is None and isinstance(content, dict):
+            parts = content.get("parts")
+
+        if parts:
+            current_speaker: str | None = None
+            current_texts: list[str] = []
+
+            for part in parts:
+                audio_tx = getattr(part, "audio_transcription", None)
+                if audio_tx is None and isinstance(part, dict):
+                    audio_tx = part.get("audio_transcription")
+
+                speaker_raw = None
+                if audio_tx:
+                    speaker_raw = (
+                        getattr(audio_tx, "speaker_label", None)
+                        or getattr(audio_tx, "speakerLabel", None)
+                    )
+                    if speaker_raw is None and isinstance(audio_tx, dict):
+                        speaker_raw = audio_tx.get("speaker_label") or audio_tx.get("speakerLabel")
+
+                text = getattr(part, "text", None)
+                if text is None and isinstance(part, dict):
+                    text = part.get("text")
+                if not text and audio_tx:
+                    text = getattr(audio_tx, "text", None)
+                    if text is None and isinstance(audio_tx, dict):
+                        text = audio_tx.get("text")
+
+                text_str = str(text).strip() if text else ""
+                if not text_str:
+                    continue
+
+                spk = normalize_speaker_label(speaker_raw) if speaker_raw else (current_speaker or "Speaker 1")
+
+                if spk != current_speaker:
+                    if current_speaker is not None and current_texts:
+                        turns.append((current_speaker, current_texts))
+                    current_speaker = spk
+                    current_texts = [text_str]
+                else:
+                    current_texts.append(text_str)
+
+            if current_speaker is not None and current_texts:
+                turns.append((current_speaker, current_texts))
+
+    if not turns:
+        output_text = getattr(response, "output_text", None)
+        if output_text is None:
+            if isinstance(response, dict):
+                output_text = response.get("output_text")
+            elif isinstance(response, str):
+                output_text = response
+
+        if output_text and isinstance(output_text, str):
+            lines = output_text.strip().split("\n")
+            current_speaker = None
+            current_texts = []
+
+            for line in lines:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+
+                m = re.match(
+                    r"^(?:\[?(spk_?\d+|Speaker\s*\d+)\]?|\b(spk_\d+)\b):\s*(.*)$",
+                    line_str,
+                    re.I,
+                )
+                if m:
+                    raw_spk = m.group(1) or m.group(2)
+                    rest_text = m.group(3).strip()
+                    spk = normalize_speaker_label(raw_spk)
+
+                    if spk != current_speaker:
+                        if current_speaker is not None and current_texts:
+                            turns.append((current_speaker, current_texts))
+                        current_speaker = spk
+                        current_texts = [rest_text] if rest_text else []
+                    else:
+                        if rest_text:
+                            current_texts.append(rest_text)
+                else:
+                    if current_speaker is None:
+                        current_speaker = "Speaker 1"
+                    current_texts.append(line_str)
+
+            if current_speaker is not None and current_texts:
+                turns.append((current_speaker, current_texts))
+
+    result_lines: list[str] = []
+    for spk, texts in turns:
+        combined_text = " ".join(texts).strip()
+        if not combined_text:
+            continue
+        formatted_turn = format_transcript_lines(
+            combined_text,
+            max_chars_per_line=max_chars_per_line,
+            max_sentences_per_line=max_sentences_per_line,
+        )
+        if not formatted_turn:
+            continue
+        turn_lines = formatted_turn.split("\n")
+        result_lines.append(f"{spk}: {turn_lines[0]}")
+        result_lines.extend(turn_lines[1:])
+
+    return "\n".join(result_lines)
+
+
+def format_gemini_plain_transcript(
+    response: Any,
+    mode: str = "verbatim",
+    max_chars_per_line: int = TRANSCRIPTION_MAX_CHARS_PER_LINE,
+    max_sentences_per_line: int = TRANSCRIPTION_MAX_SENTENCES_PER_LINE,
+) -> str:
+    """
+    Extracts and formats plain (non-diarized) transcript from a Gemini response.
+    Supports verbatim and smart modes.
+    """
+    if not response:
+        return ""
+
+    raw_text = ""
+    if isinstance(response, str):
+        raw_text = response
+    elif hasattr(response, "output_text") and response.output_text:
+        raw_text = response.output_text
+    elif isinstance(response, dict) and "output_text" in response:
+        raw_text = response["output_text"]
+    elif hasattr(response, "text") and response.text:
+        raw_text = response.text
+    elif hasattr(response, "candidates") and response.candidates:
+        parts_texts: list[str] = []
+        for cand in response.candidates:
+            if hasattr(cand, "content") and hasattr(cand.content, "parts"):
+                for p in cand.content.parts:
+                    t = getattr(p, "text", "") or ""
+                    if t:
+                        parts_texts.append(t)
+        raw_text = " ".join(parts_texts)
+    elif isinstance(response, dict) and "candidates" in response:
+        parts_texts = []
+        for cand in response.get("candidates", []):
+            content = cand.get("content", {})
+            for p in content.get("parts", []):
+                t = p.get("text", "")
+                if t:
+                    parts_texts.append(t)
+        raw_text = " ".join(parts_texts)
+    else:
+        raw_text = str(response)
+
+    if mode == "smart":
+        return format_smart_transcript(raw_text, max_chars_per_line=max_chars_per_line)
+    return format_transcript_lines(
+        raw_text,
+        max_chars_per_line=max_chars_per_line,
+        max_sentences_per_line=max_sentences_per_line,
+    )
+
+
 def stitch_diarized_transcripts(
-    responses: list[cloud_speech.BatchRecognizeResponse],
+    responses: list[Any],
 ) -> str:
     """
     Stitch together diarized transcripts from multiple chunked files.
@@ -238,7 +533,7 @@ def stitch_diarized_transcripts(
     reconciliation is deferred to v0.3.
 
     Args:
-        responses: Ordered list of BatchRecognizeResponse (one per chunk).
+        responses: Ordered list of BatchRecognizeResponse or Gemini responses.
 
     Returns:
         Full stitched transcript with chunk boundary markers and speaker notices.
@@ -247,8 +542,13 @@ def stitch_diarized_transcripts(
     total_chunks = len(responses)
 
     for i, response in enumerate(responses):
-        results = _extract_results_from_response(response)
-        chunk_text = format_diarized_transcript(results)
+        if hasattr(response, "results") and hasattr(response, "_pb"):
+            results = _extract_results_from_response(response)
+            chunk_text = format_diarized_transcript(results)
+        elif isinstance(response, str):
+            chunk_text = response
+        else:
+            chunk_text = format_gemini_diarized_transcript(response)
 
         if chunk_text:
             if i > 0:
@@ -264,7 +564,8 @@ def stitch_diarized_transcripts(
 
 
 def stitch_plain_transcripts(
-    responses: list[cloud_speech.BatchRecognizeResponse],
+    responses: list[Any],
+    mode: str = "verbatim",
 ) -> str:
     """
     Stitch together plain (non-diarized) transcripts.
@@ -272,7 +573,8 @@ def stitch_plain_transcripts(
     Inserts chunk boundary markers if multiple chunks are present.
 
     Args:
-        responses: Ordered list of BatchRecognizeResponse.
+        responses: Ordered list of BatchRecognizeResponse or Gemini responses.
+        mode: Transcription mode ('verbatim' or 'smart') for Gemini plain text.
 
     Returns:
         Full stitched transcript text.
@@ -281,8 +583,14 @@ def stitch_plain_transcripts(
     total_chunks = len(responses)
 
     for i, response in enumerate(responses):
-        results = _extract_results_from_response(response)
-        chunk_text = format_plain_transcript(results)
+        if hasattr(response, "results") and hasattr(response, "_pb"):
+            results = _extract_results_from_response(response)
+            chunk_text = format_plain_transcript(results)
+        elif isinstance(response, str):
+            chunk_text = response
+        else:
+            chunk_text = format_gemini_plain_transcript(response, mode=mode)
+
         if chunk_text:
             if i > 0 and total_chunks > 1:
                 parts.append(f"\n\n--- Chunk Boundary (Chunk {i + 1} of {total_chunks}) ---\n\n")
@@ -291,16 +599,9 @@ def stitch_plain_transcripts(
     return ''.join(parts) if total_chunks > 1 else ' '.join(parts)
 
 
-def _responses_to_dict(
-    responses: list[cloud_speech.BatchRecognizeResponse],
-) -> list[dict[str, Any]]:
-    """Convert protobuf responses to serializable dicts."""
-    return [MessageToDict(r._pb) for r in responses]
-
-
 def save_transcript(
     transcript_text: str,
-    raw_responses: list[cloud_speech.BatchRecognizeResponse],
+    raw_responses: list[Any],
     output_dir: str,
     base_name: str,
     lang: str,
@@ -310,7 +611,7 @@ def save_transcript(
 
     Args:
         transcript_text: Formatted transcript string.
-        raw_responses: Raw BatchRecognizeResponse objects for JSON dump.
+        raw_responses: Raw response objects (BatchRecognizeResponse or Gemini responses) for JSON dump.
         output_dir: Directory to save output files.
         base_name: Base filename (without extension).
         lang: Language code used.
