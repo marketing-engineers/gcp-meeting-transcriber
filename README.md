@@ -95,7 +95,7 @@ For high-volume enterprise workloads, Speech-to-Text V2, or Vertex AI:
     Key environment variables:
     - `TRANSCRIPTION_MODEL` (Default: `auto`): Model routing policy (`auto`, `gemini-3.5-transcribe`, or `chirp_3`).
     - `GEMINI_API_KEY`: API key for Gemini AI Studio.
-    - `GEMINI_BACKEND` (Default: `auto`): Backend selection (`auto`, `api_key`, or `vertex`).
+    - `GEMINI_BACKEND` (Default: `auto`): Backend selection (`auto`, `api_key`, or `vertex`). In `auto` mode, prefers GCP (Vertex AI) if GCP credentials are configured, falling back to Google AI Studio if only `GEMINI_API_KEY` is present.
     - `TRANSCRIPTION_CONCURRENCY` (Default: `5`): Maximum number of audio chunks submitted concurrently per wave.
     - `CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED` (Default: `1680` / 28 min): Safe diarization ceiling for Gemini.
     - `CHUNK_MAX_LENGTH_SECONDS_DUTCH` / `CHUNK_MAX_LENGTH_SECONDS_ENGLISH` (Default: `2700` / 45 min): Safe ceiling for Chirp 3.
