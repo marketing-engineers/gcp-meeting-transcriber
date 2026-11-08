@@ -223,6 +223,10 @@ class TestProcessFileRouting:
         assert mock_tgf.call_args.kwargs["diarize"] is True
         mock_stitch.assert_called_once()
         mock_save.assert_called_once()
+        save_kwargs = mock_save.call_args.kwargs
+        assert save_kwargs["duration"] == 500.0
+        assert save_kwargs["model"] == "gemini-3.5-transcribe"
+        assert save_kwargs["diarize"] is True
 
     @patch("src.main.os.path.exists", return_value=True)
     @patch("src.main.validate_extension", return_value=True)
