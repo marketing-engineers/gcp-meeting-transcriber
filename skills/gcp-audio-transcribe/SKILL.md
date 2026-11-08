@@ -18,7 +18,7 @@ This skill provides autonomous transcription of audio and video recordings (such
 
 - `input/`: Source media files for transcription (e.g. `input/meeting.mp4`).
 - `output/`: Temporary working directory for FLAC extraction and chunking (managed automatically).
-- `transcripts/`: Final transcript outputs saved as `<basename>_<lang>.txt` (human-readable, line-bounded text) and `<basename>_<lang>_raw.json` (GCP API metadata).
+- `transcripts/`: Final transcript outputs saved as `<basename>_<lang>_transcript.md` (human/LLM-readable Markdown with YAML frontmatter) and `<basename>_<lang>_raw.json` (API metadata).
 
 ## Core Commands
 

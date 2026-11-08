@@ -123,6 +123,7 @@ For high-volume enterprise workloads, Speech-to-Text V2, or Vertex AI:
    - `--mode {verbatim,smart}`: Transcription formatting mode for Gemini plain audio.
    - `--lang {nl-nl,en-us,en-gb,auto}`: Language code. `auto` is supported by Gemini.
    - `--speakers <N>`: Optional speaker count hint.
+   - `--milestone-interval <N>`: Interval in seconds for timestamp milestone indicators (default: `300` / 5 minutes, set to `0` to disable).
    - `--prepare-only`: Extract and prepare FLAC chunks without making API calls.
    - `--from-gcs <prefix>`: Transcribe audio files already residing in GCS.
 
@@ -162,9 +163,9 @@ flowchart TD
     M --> O
     N --> O
     
-    O --> P["Phase 3: Post-Processing & Stitching<br/>• Diarized: Speaker 1, Speaker 2 formatting<br/>• Plain: Sentence-bounded wrapping (120 chars)<br/>• Smart: Preserves markdown lists & bullets"]
+    O --> P["Phase 3: Post-Processing & Stitching<br/>• Diarized: Speaker 1, Speaker 2 formatting<br/>• Plain: Sentence-bounded wrapping (120 chars)<br/>• Smart: Preserves markdown lists & bullets<br/>• Milestones: Timestamp markers every 5 min"]
     
-    P --> Q["Final Artifacts Saved in transcripts/<br/>• .txt: Clean Transcript<br/>• .json: Full API Metadata"]
+    P --> Q["Final Artifacts Saved in transcripts/<br/>• .md: Markdown Transcript (YAML Frontmatter)<br/>• .json: Full API Metadata"]
 ```
 
 #### Functional Step Breakdown
@@ -187,11 +188,62 @@ flowchart TD
    - Submits single-file BatchRecognize requests to Google Cloud Speech-to-Text V2 using Chirp 3.
    - Uses adaptive polling intervals and automated exponential backoff on transient rate limits (`429 RESOURCE_EXHAUSTED`).
 
-5. **Post-Processing & Formatting:**
-   - English transcripts format dialogues by speaker (e.g., `Speaker 1: ...`, `Speaker 2: ...`).
-   - All transcripts are formatted across sentence boundaries (`.`, `?`, `!`) with a target line length of 120 characters, avoiding thousands of characters on a single line and optimizing for LLMs, diffs, and reading.
+5. **Markdown Post-Processing, Frontmatter & Milestones:**
+   - **YAML Frontmatter:** Every transcript begins with standard YAML frontmatter containing generation timestamp, source filename, human-readable and second-level audio duration, repository name, and exact transcription settings (model, mode, language(s), diarization, speaker count).
+   - **Dialogue Formatting:** Speaker turns format cleanly with normalized speaker labels (`Speaker 1: ...`, `Speaker 2: ...`) and wrap onto new lines at sentence boundaries with a target line length of 120 characters.
+   - **Milestone Timestamps:** Rather than polluting every line with timestamps, discrete milestone markers (e.g. `_**[05:00]**_`, `_**[10:00]**_`) appear at regular intervals (default: 5 minutes / 300s, configurable via `--milestone-interval`).
+   - **Multi-Chunk Boundary Indicators:** When long recordings are split into multiple chunks, each section is distinctly labeled (`## Part A (Chunk 1 of 2)`, `## Part B (Chunk 2 of 2)`) with a clear callout notice informing readers that speaker labels reset per chunk and do not correlate across parts.
 
 ---
+
+### Sample Transcript Output (`.md`)
+
+Transcripts are delivered as ready-to-read Markdown files (`transcripts/<basename>_<lang>_transcript.md`) complete with structured frontmatter and time anchors:
+
+```markdown
+---
+generated_at: "2026-11-08T16:48:00Z"
+source_file: "quarterly_review.mp4"
+duration: "45m 12s"
+duration_seconds: 2712.5
+repository: "marketing-engineers-gcp-audio-transcribe"
+settings:
+  model: "gemini-3.5-transcribe"
+  mode: "verbatim"
+  language: "nl-NL"
+  languages:
+    - "nl-NL"
+    - "en-US"
+  diarization: true
+  speakers: "auto-detect"
+---
+
+# Transcript: quarterly_review.mp4
+
+## Part A (Chunk 1 of 2) (00:00 - 28:00)
+
+> ℹ️ **Speaker Attribution Scope:** This recording was split into 2 parts for processing. Speaker labels (e.g. `Speaker 1`, `Speaker 2`) are local to Part A and might not align with Part B, C, D, etc.
+
+Speaker 1: Goedemorgen allemaal, welkom bij de kwartaalreview. We gaan vandaag de resultaten van het afgelopen kwartaal doornemen.
+Speaker 2: Dankjewel. Laten we meteen kijken naar de omzetcijfers en marketingcampagnes van Q3.
+
+_**[05:00]**_
+
+Speaker 1: Wat betreft de customer acquisition cost zien we een daling van achttien procent ten opzichte van vorig jaar.
+Speaker 2: Dat klopt, vooral de organische kanalen en referral programma's hebben zeer sterk gepresteerd.
+
+---
+
+## Part B (Chunk 2 of 2) (28:00 - 45:12)
+
+> ⚠️ **Speaker Attribution Notice:** Speaker numbers in Chunk 2 (Part B) are local to this chunk and DO NOT correspond to speaker numbers in previous chunks (Part A). Speaker labels from Part A might not align with Part B, etc.
+
+Speaker 1: We zijn nu aangekomen bij het tweede deel van de meeting: de roadmap voor komend kwartaal.
+
+_**[30:00]**_
+
+Speaker 2: Voor Q4 stellen we voor om extra budget vrij te maken voor onze cloud infrastructure en transcriptie pipelines.
+```
 
 ### Real-Time Upload Feedback & Dual Logging Architecture
 - **GCS Upload Streaming:** Large audio chunks are streamed to GCS in 2 MB resumable chunks. When running in an interactive terminal, upload progress updates in place on a single line (like `wget`/`curl`) every 5 seconds, displaying transferred megabytes, percentage, and real-time upload speed (MB/s).
