@@ -1,12 +1,19 @@
-"""Tests for src/main.py — CLI argument parsing, route selection, interactive prompt."""
+"""Tests for src/main.py — CLI argument parsing, route selection, decision trees, and interactive prompt."""
 
+import json
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from src.main import _prompt_speaker_count, process_file
 from src.audio import ProcessingError
+from src.main import (
+    EXIT_DECISION_REQUIRED,
+    _prompt_speaker_count,
+    main,
+    process_file,
+    resolve_transcription_plan,
+)
 
 
 class TestPromptSpeakerCount:
@@ -98,14 +105,14 @@ class TestCLIArgumentParsing:
 
     def test_prepare_only_flag_accepted(self):
         """--prepare-only flag is parsed correctly."""
-        from src.main import main
-
         test_args = ["prog", "input.mp4", "--lang", "en-us", "--prepare-only"]
         with patch.object(sys, "argv", test_args):
             with patch("src.main.process_file") as mock_pf:
                 with patch("src.main.setup_logging"):
                     main()
-                    mock_pf.assert_called_once_with("input.mp4", "en-us", prepare_only=True)
+                    assert mock_pf.call_args.kwargs.get("prepare_only") is True
+                    assert mock_pf.call_args.kwargs.get("input_path") == "input.mp4"
+                    assert mock_pf.call_args.kwargs.get("lang") == "en-us"
 
     def test_default_no_prepare_only(self):
         """Without --prepare-only, prepare_only=False is passed."""
@@ -113,9 +120,8 @@ class TestCLIArgumentParsing:
         with patch.object(sys, "argv", test_args):
             with patch("src.main.process_file") as mock_pf:
                 with patch("src.main.setup_logging"):
-                    from src.main import main
                     main()
-                    mock_pf.assert_called_once_with("input.mp4", "nl-nl", prepare_only=False)
+                    assert mock_pf.call_args.kwargs.get("prepare_only") is False
 
     def test_from_gcs_option_accepted(self):
         """--from-gcs option triggers transcribe_from_gcs."""
@@ -123,21 +129,39 @@ class TestCLIArgumentParsing:
         with patch.object(sys, "argv", test_args):
             with patch("src.main.transcribe_from_gcs") as mock_tfgcs:
                 with patch("src.main.setup_logging"):
-                    from src.main import main
                     mock_tfgcs.return_value = ("txt_path", "json_path")
                     main()
-                    mock_tfgcs.assert_called_once_with(
-                        target="sample-meeting_prefix",
-                        lang="nl-nl",
-                        speaker_count=None,
-                    )
+                    assert mock_tfgcs.call_args.kwargs.get("target") == "sample-meeting_prefix"
+                    assert mock_tfgcs.call_args.kwargs.get("lang") == "nl-nl"
+
+    def test_model_and_diarize_flags_accepted(self):
+        """--model, --diarize, and --mode flags are parsed and passed to process_file."""
+        test_args = [
+            "prog", "input.mp4", "--lang", "nl-nl",
+            "--model", "gemini-3.5-transcribe", "--diarize", "--mode", "smart"
+        ]
+        with patch.object(sys, "argv", test_args):
+            with patch("src.main.process_file") as mock_pf:
+                with patch("src.main.setup_logging"):
+                    main()
+                    assert mock_pf.call_args.kwargs.get("model") == "gemini-3.5-transcribe"
+                    assert mock_pf.call_args.kwargs.get("diarize") is True
+                    assert mock_pf.call_args.kwargs.get("mode") == "smart"
+
+    def test_no_diarize_flag_accepted(self):
+        """--no-diarize sets diarize=False."""
+        test_args = ["prog", "input.mp4", "--lang", "en-us", "--no-diarize"]
+        with patch.object(sys, "argv", test_args):
+            with patch("src.main.process_file") as mock_pf:
+                with patch("src.main.setup_logging"):
+                    main()
+                    assert mock_pf.call_args.kwargs.get("diarize") is False
 
     def test_missing_both_input_file_and_from_gcs_errors(self):
         """Providing neither input_file nor --from-gcs raises SystemExit."""
         test_args = ["prog", "--lang", "nl-nl"]
         with patch.object(sys, "argv", test_args):
             with patch("src.main.setup_logging"):
-                from src.main import main
                 with pytest.raises(SystemExit):
                     main()
 
@@ -146,7 +170,6 @@ class TestCLIArgumentParsing:
         test_args = ["prog", "input.mp4", "--from-gcs", "prefix", "--lang", "nl-nl"]
         with patch.object(sys, "argv", test_args):
             with patch("src.main.setup_logging"):
-                from src.main import main
                 with pytest.raises(SystemExit):
                     main()
 
@@ -156,7 +179,6 @@ class TestCLIArgumentParsing:
         with patch.object(sys, "argv", test_args):
             with patch("src.main.setup_logging"), \
                  patch("src.main.check_auth", return_value=True) as mock_check:
-                from src.main import main
                 with pytest.raises(SystemExit) as exc_info:
                     main()
                 assert exc_info.value.code == 0
@@ -168,180 +190,145 @@ class TestCLIArgumentParsing:
         with patch.object(sys, "argv", test_args):
             with patch("src.main.setup_logging"), \
                  patch("src.main.check_auth", return_value=False) as mock_check:
-                from src.main import main
                 with pytest.raises(SystemExit) as exc_info:
                     main()
                 assert exc_info.value.code == 1
                 mock_check.assert_called_once()
 
 
-class TestProcessFileDutchRoute:
-    """Tests for process_file routing through Dutch route (monolithic vs chunked)."""
+class TestProcessFileRouting:
+    """Tests for routing logic, decision tree, and execution."""
 
     @patch("src.main.os.path.exists", return_value=True)
     @patch("src.main.validate_extension", return_value=True)
-    @patch("src.main.validate_gcp_config")
+    @patch("src.main.validate_backend_config")
     @patch("src.main.extract_audio_to_flac")
-    @patch("src.main.get_audio_duration")
+    @patch("src.main.get_audio_duration", return_value=500.0)
     @patch("src.main.detect_silences", return_value=[])
     @patch("src.main.compute_chunk_boundaries", return_value=[])
-    @patch("src.main.split_flac")
-    @patch("src.main.upload_to_gcs")
-    @patch("src.main.transcribe_single_file")
-    @patch("src.main.stitch_plain_transcripts")
-    @patch("src.main.save_transcript")
-    @patch("src.main.delete_gcs_prefix")
+    @patch("src.main.get_gemini_backend_mode", return_value="api_key")
+    @patch("src.main.transcribe_gemini_files", return_value=[MagicMock()])
+    @patch("src.main.stitch_diarized_transcripts", return_value="Speaker 1: Hallo")
+    @patch("src.main.save_transcript", return_value=("t.txt", "t.json"))
     @patch("src.main.os.remove")
-    def test_dutch_monolithic_route(
-        self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
-        mock_transcribe, mock_upload, mock_split, mock_boundaries, mock_silences,
-        mock_duration, mock_extract, mock_validate_gcp, mock_validate_ext, mock_exists
+    def test_short_recording_auto_selects_gemini_with_diarization(
+        self, mock_remove, mock_save, mock_stitch, mock_tgf, mock_backend,
+        mock_boundaries, mock_silences, mock_duration, mock_extract, mock_val, mock_ext, mock_exists
     ):
-        """Short Dutch file (compute_chunk_boundaries returns []) goes monolithic without split_flac."""
-        mock_duration.return_value = 500.0
-        mock_upload.return_value = "gs://bucket/prefix/file.flac"
-        mock_transcribe.return_value = MagicMock()
-        mock_stitch.return_value = "transcribed text"
-        mock_save_tr.return_value = ("txt_path", "json_path")
+        """Short recording (500s <= 28m) auto-selects gemini-3.5-transcribe with diarization for Dutch."""
+        with patch("src.main._has_gemini_backend", return_value=True):
+            process_file("input.mp4", "nl-nl", prepare_only=False)
 
-        process_file("input.mp4", "nl-nl", prepare_only=False)
-
-        mock_extract.assert_called_once()
-        mock_duration.assert_called_once()
-        mock_boundaries.assert_called_once()
-        # Verify Dutch passes target_parallelism (concurrency)
-        assert mock_boundaries.call_args[1]["target_parallelism"] == 5
-        mock_split.assert_not_called()
-        mock_upload.assert_called_once()
-        mock_transcribe.assert_called_once()
+        mock_tgf.assert_called_once()
+        assert mock_tgf.call_args.kwargs["diarize"] is True
         mock_stitch.assert_called_once()
-        mock_save_tr.assert_called_once()
-        mock_delete_gcs.assert_called_once()
-        mock_remove.assert_called_once()
+        mock_save.assert_called_once()
 
     @patch("src.main.os.path.exists", return_value=True)
     @patch("src.main.validate_extension", return_value=True)
-    @patch("src.main.validate_gcp_config")
+    @patch("src.main.validate_backend_config")
     @patch("src.main.extract_audio_to_flac")
-    @patch("src.main.get_audio_duration")
-    @patch("src.main.detect_silences", return_value=[(1490.0, 1492.0)])
-    @patch("src.main.compute_chunk_boundaries", return_value=[1491.0, 2980.0])
-    @patch("src.main.split_flac")
-    @patch("src.main.upload_files_to_gcs")
-    @patch("src.main.transcribe_files")
-    @patch("src.main.stitch_plain_transcripts")
-    @patch("src.main.save_transcript")
-    @patch("src.main.delete_gcs_prefix")
-    @patch("src.main.os.remove")
-    def test_dutch_chunked_route(
-        self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
-        mock_transcribe, mock_upload_files, mock_split, mock_boundaries, mock_silences,
-        mock_duration, mock_extract, mock_validate_gcp, mock_validate_ext, mock_exists
-    ):
-        """Long Dutch file (boundaries returned) calls split_flac and transcribe_files."""
-        mock_duration.return_value = 4500.0
-        mock_split.return_value = ["chunk1.flac", "chunk2.flac", "chunk3.flac"]
-        mock_upload_files.return_value = ["gs://b/p/c1.flac", "gs://b/p/c2.flac", "gs://b/p/c3.flac"]
-        mock_transcribe.return_value = [MagicMock(), MagicMock(), MagicMock()]
-        mock_stitch.return_value = "stitched text"
-        mock_save_tr.return_value = ("txt_path", "json_path")
-
-        process_file("input.mp4", "nl-nl", prepare_only=False)
-
-        mock_extract.assert_called_once()
-        mock_duration.assert_called_once()
-        mock_boundaries.assert_called_once()
-        mock_split.assert_called_once_with(
-            "output/input_nl-nl.flac", "output", "input", [1491.0, 2980.0]
-        )
-        mock_upload_files.assert_called_once()
-        mock_transcribe.assert_called_once()
-        mock_stitch.assert_called_once()
-        mock_save_tr.assert_called_once()
-        mock_delete_gcs.assert_called_once()
-        # Clean up 3 chunks + monolithic flac
-        assert mock_remove.call_count == 4
-
-
-class TestProcessFileEnglishRoute:
-    """Tests for process_file routing through English route."""
-
-    @patch("src.main.os.path.exists", return_value=True)
-    @patch("src.main.validate_extension", return_value=True)
-    @patch("src.main.validate_gcp_config")
-    @patch("src.main.extract_audio_to_flac")
-    @patch("src.main.get_audio_duration")
+    @patch("src.main.get_audio_duration", return_value=2000.0)
     @patch("src.main.detect_silences", return_value=[])
     @patch("src.main.compute_chunk_boundaries", return_value=[])
-    @patch("src.main.split_flac")
-    @patch("src.main._prompt_speaker_count", return_value=2)
-    @patch("src.main.upload_to_gcs")
-    @patch("src.main.transcribe_single_file")
-    @patch("src.main.stitch_diarized_transcripts")
-    @patch("src.main.save_transcript")
+    @patch("src.main.upload_to_gcs", return_value="gs://b/p/file.flac")
+    @patch("src.main.transcribe_single_file", return_value=MagicMock())
+    @patch("src.main.stitch_diarized_transcripts", return_value="Speaker 1: Hi")
+    @patch("src.main.save_transcript", return_value=("t.txt", "t.json"))
     @patch("src.main.delete_gcs_prefix")
     @patch("src.main.os.remove")
-    def test_english_monolithic_route(
-        self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
-        mock_transcribe, mock_upload, mock_prompt, mock_split, mock_boundaries, mock_silences,
-        mock_duration, mock_extract, mock_validate_gcp, mock_validate_ext, mock_exists
+    def test_english_medium_recording_auto_switches_to_chirp_monolithic(
+        self, mock_remove, mock_delete_gcs, mock_save, mock_stitch, mock_tsf,
+        mock_upload, mock_boundaries, mock_silences, mock_duration, mock_extract, mock_val, mock_ext, mock_exists
     ):
-        """Short English file takes monolithic path with diarization."""
-        mock_duration.return_value = 800.0
-        mock_upload.return_value = "gs://b/p/file.flac"
-        mock_transcribe.return_value = MagicMock()
-        mock_stitch.return_value = "speaker transcript"
-        mock_save_tr.return_value = ("txt_path", "json_path")
+        """English recording between 28m and 45m auto-switches to chirp_3 with diarization for monolithic pass."""
+        with patch("src.main._has_chirp_backend", return_value=True):
+            process_file("input.mp4", "en-us", prepare_only=False)
 
-        process_file("input.mp4", "en-us", prepare_only=False)
-
-        mock_extract.assert_called_once()
-        mock_boundaries.assert_called_once()
-        # English passes target_parallelism=None
-        assert mock_boundaries.call_args[1]["target_parallelism"] is None
-        mock_split.assert_not_called()
-        mock_upload.assert_called_once()
-        mock_transcribe.assert_called_once()
+        mock_tsf.assert_called_once()
+        assert mock_tsf.call_args.kwargs["enable_diarization"] is True
         mock_stitch.assert_called_once()
-        mock_remove.assert_called_once()
+
+    @patch("src.main.os.path.exists", return_value=True)
+    @patch("src.main.os.remove")
+    @patch("src.main.validate_extension", return_value=True)
+    @patch("src.main.validate_backend_config")
+    @patch("src.main.extract_audio_to_flac")
+    @patch("src.main.get_audio_duration", return_value=4500.0)
+    def test_long_recording_decision_required_non_interactive(
+        self, mock_duration, mock_extract, mock_val, mock_ext, mock_remove, mock_exists
+    ):
+        """Long recording (> 45m) without --diarize/--no-diarize exits with code 2 in non-interactive mode and cleans up FLAC."""
+        with patch("src.main._has_gemini_backend", return_value=True), \
+             patch("src.main._has_chirp_backend", return_value=True):
+            with pytest.raises(SystemExit) as exc_info:
+                process_file("input.mp4", "nl-nl", prepare_only=False, interactive=False)
+            assert exc_info.value.code == EXIT_DECISION_REQUIRED
+            mock_remove.assert_called_once()
+
+    def test_long_recording_auto_lang_with_diarize_routes_to_gemini(self):
+        """Long recording with --lang auto and --diarize routes to gemini-3.5-transcribe, not chirp_3."""
+        with patch("src.main._has_gemini_backend", return_value=True), \
+             patch("src.main._has_chirp_backend", return_value=True):
+            plan = resolve_transcription_plan(
+                duration=3000.0,
+                lang="auto",
+                requested_model="auto",
+                requested_diarize=True,
+                mode="verbatim",
+                speaker_count=None,
+                interactive=False,
+            )
+            assert plan.model == "gemini-3.5-transcribe"
+            assert plan.diarize is True
 
     @patch("src.main.os.path.exists", return_value=True)
     @patch("src.main.validate_extension", return_value=True)
-    @patch("src.main.validate_gcp_config")
+    @patch("src.main.validate_backend_config")
     @patch("src.main.extract_audio_to_flac")
-    @patch("src.main.get_audio_duration")
+    @patch("src.main.get_audio_duration", return_value=4500.0)
     @patch("src.main.detect_silences", return_value=[])
     @patch("src.main.compute_chunk_boundaries", return_value=[2600.0])
-    @patch("src.main.split_flac")
-    @patch("src.main._prompt_speaker_count", return_value=3)
-    @patch("src.main.upload_files_to_gcs")
-    @patch("src.main.transcribe_files")
-    @patch("src.main.stitch_diarized_transcripts")
-    @patch("src.main.save_transcript")
+    @patch("src.main.split_flac", return_value=["chunk1.flac", "chunk2.flac"])
+    @patch("src.main.upload_files_to_gcs", return_value=["gs://b/p/c1.flac", "gs://b/p/c2.flac"])
+    @patch("src.main.transcribe_files", return_value=[MagicMock(), MagicMock()])
+    @patch("src.main.stitch_plain_transcripts", return_value="plain text")
+    @patch("src.main.save_transcript", return_value=("t.txt", "t.json"))
     @patch("src.main.delete_gcs_prefix")
     @patch("src.main.os.remove")
-    def test_english_chunked_route(
-        self, mock_remove, mock_delete_gcs, mock_save_tr, mock_stitch,
-        mock_transcribe, mock_upload_files, mock_prompt, mock_split, mock_boundaries, mock_silences,
-        mock_duration, mock_extract, mock_validate_gcp, mock_validate_ext, mock_exists
+    def test_long_recording_with_explicit_no_diarize(
+        self, mock_remove, mock_delete_gcs, mock_save, mock_stitch, mock_tf,
+        mock_upload, mock_split, mock_boundaries, mock_silences, mock_duration,
+        mock_extract, mock_val, mock_ext, mock_exists
     ):
-        """Long English file takes chunked path with diarization."""
-        mock_duration.return_value = 5000.0
-        mock_split.return_value = ["chunk1.flac", "chunk2.flac"]
-        mock_upload_files.return_value = ["gs://b/p/c1.flac", "gs://b/p/c2.flac"]
-        mock_transcribe.return_value = [MagicMock(), MagicMock()]
-        mock_stitch.return_value = "stitched diarized text"
-        mock_save_tr.return_value = ("txt_path", "json_path")
+        """Long recording with --no-diarize does not require a decision and proceeds."""
+        with patch("src.main._has_chirp_backend", return_value=True):
+            process_file("input.mp4", "nl-nl", diarize=False, prepare_only=False)
 
-        process_file("input.mp4", "en-us", prepare_only=False)
-
-        mock_extract.assert_called_once()
-        mock_boundaries.assert_called_once()
-        assert mock_boundaries.call_args[1]["target_parallelism"] is None
-        mock_split.assert_called_once_with(
-            "output/input_en-us.flac", "output", "input", [2600.0]
-        )
-        mock_upload_files.assert_called_once()
-        mock_transcribe.assert_called_once()
+        mock_tf.assert_called_once()
+        assert mock_tf.call_args.kwargs["enable_diarization"] is False
         mock_stitch.assert_called_once()
-        assert mock_remove.call_count == 3  # 2 chunks + monolithic flac
+
+    @patch("src.main.os.path.exists", return_value=True)
+    @patch("src.main.validate_extension", return_value=True)
+    @patch("src.main.validate_backend_config")
+    @patch("src.main.extract_audio_to_flac")
+    @patch("src.main.get_audio_duration", return_value=3000.0)
+    @patch("src.main.detect_silences", return_value=[])
+    @patch("src.main.compute_chunk_boundaries", return_value=[])
+    @patch("src.main.get_gemini_backend_mode", return_value="api_key")
+    @patch("src.main.transcribe_gemini_files", return_value=[MagicMock()])
+    @patch("src.main.stitch_diarized_transcripts", return_value="text")
+    @patch("src.main.save_transcript", return_value=("t.txt", "t.json"))
+    @patch("src.main.os.remove")
+    def test_interactive_decision_prompt_selection(
+        self, mock_remove, mock_save, mock_stitch, mock_tgf, mock_backend,
+        mock_boundaries, mock_silences, mock_duration, mock_extract, mock_val, mock_ext, mock_exists
+    ):
+        """In interactive mode, user selection (1) resolves and executes the selected plan."""
+        with patch("src.main._has_gemini_backend", return_value=True), \
+             patch("builtins.input", return_value="1"):
+            process_file("input.mp4", "nl-nl", interactive=True)
+
+        mock_tgf.assert_called_once()
+        assert mock_tgf.call_args.kwargs["diarize"] is True

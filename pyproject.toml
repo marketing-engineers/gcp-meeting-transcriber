@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "marketing-engineers-transcription-automator"
-version = "0.2.0"
+version = "0.3.0"
 description = "Automates extraction, processing, and transcription of meeting recordings via GCP Speech-to-Text."
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -15,6 +15,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "google-cloud-speech>=2.0",
     "google-cloud-storage>=2.0",
+    "google-genai>=1.0.0",
 ]
 
 [project.optional-dependencies]

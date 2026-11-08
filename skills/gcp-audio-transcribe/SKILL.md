@@ -54,6 +54,16 @@ Extract audio and split into FLAC chunks without uploading to GCP or making clou
 venv/bin/python -m src.main input/recording.mp4 --lang nl-NL --prepare-only
 ```
 
+### 5. Handling Non-Interactive Routing Decisions (Exit Code 2)
+When processing audio recordings that exceed single-pass thresholds without explicit `--diarize` or `--no-diarize` flags:
+- The script will **not** hang on terminal input; it exits cleanly with exit code `2` (`EXIT_DECISION_REQUIRED`).
+- It outputs a structured JSON block to `stderr` containing the audio duration, why a decision is needed, and numbered options with exact commands.
+- **Agent Workflow when Exit Code 2 is Encountered:**
+  1. Parse the JSON block from `stderr`.
+  2. Present the choices clearly to the human user in chat (e.g., whether to keep speaker diarization with chunk boundaries or generate a continuous transcript without speaker labels).
+  3. Wait for the user's decision.
+  4. Re-invoke `venv/bin/python -m src.main` with the exact flags from the selected option (e.g., adding `--diarize` or `--no-diarize`).
+
 ## Output Delivery & Post-Processing Guidelines
 
 ### 1. Deliver as File Attachment (Required)
@@ -94,6 +104,10 @@ venv/bin/python -m src.main input/recording.mp4 --lang nl-NL --prepare-only
    - NEVER modify `GCP_AUTH_MODE` or attempt to switch authentication back to user ADC.
 
 5. **Handling Failures:**
-   - If `--check-auth` fails or an API call returns `PermissionDenied`, immediately stop execution and report the error message back to the human operator.
-   - Do not attempt workarounds or credential modifications.
+   - If `--check-auth` fails or an API call returns `PermissionDenied`, immediately stop execution and report the error message back to the human operator. Do not attempt workarounds or credential modifications.
+   - **Service Disabled (`aiplatform.googleapis.com`):** If Gemini transcription fails with `403 PERMISSION_DENIED (SERVICE_DISABLED)` for `aiplatform.googleapis.com`:
+     - Explain to the human operator that they can resolve it via:
+       - **Route A (Vertex AI):** Run `gcloud services enable aiplatform.googleapis.com --project=<PROJECT_ID>` and ensure the service account has `aiplatform.endpoints.predict` (see `docs/hermes-deployment.md`).
+       - **Route B (Google AI Studio):** Set `GEMINI_API_KEY=your_key` and `GEMINI_BACKEND=api_key` in `.env` to route through AI Studio without needing Vertex AI or GCP IAM adjustments.
+     - Never attempt to run `gcloud services enable` or `gcloud iam` commands autonomously.
 

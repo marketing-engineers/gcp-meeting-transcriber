@@ -75,6 +75,9 @@ def _get_optional_str(key: str) -> str | None:
 
 CHUNK_MAX_LENGTH_SECONDS_DUTCH: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_DUTCH", 2700)
 CHUNK_MAX_LENGTH_SECONDS_ENGLISH: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_ENGLISH", 2700)
+CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED", 1680)
+CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN", 3480)
+CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART: int = _get_int("CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART", 1200)
 CHUNK_MIN_LENGTH_SECONDS: int = _get_int("CHUNK_MIN_LENGTH_SECONDS", 600)
 CHUNK_SILENCE_SEARCH_WINDOW_SECONDS: float = _get_float("CHUNK_SILENCE_SEARCH_WINDOW_SECONDS", 15.0)
 CHUNK_SILENCE_NOISE_THRESHOLD_DB: int = _get_int("CHUNK_SILENCE_NOISE_THRESHOLD_DB", -30)
@@ -90,6 +93,34 @@ LANGUAGE_CODES_DUTCH: list[str] = _get_csv_list("LANGUAGE_CODES_DUTCH", "nl-nl")
 LANGUAGE_CODES_ENGLISH: list[str] = _get_csv_list("LANGUAGE_CODES_ENGLISH", "en-us,en-gb")
 LANGUAGE_CODES_ALL: list[str] = LANGUAGE_CODES_DUTCH + LANGUAGE_CODES_ENGLISH
 
+# Primary European language prefixes where English (en-US) should be configured as a secondary language
+# for code-switching and loanwords ("leenwoorden")
+EUROPEAN_LANGUAGE_PREFIXES: list[str] = [
+    "nl", "de", "fr", "es", "it", "pt", "sv", "da", "no", "fi", "pl", "cs", "el", "ro", "hu"
+]
+
+
+def resolve_gemini_language_codes(lang: str | None) -> list[str] | None:
+    """
+    Resolves BCP-47 language codes for Gemini 3.5 Transcribe.
+    - If lang is None or 'auto', returns None (Gemini automatically detects language and code-switching).
+    - If lang is a European language (e.g., nl-NL, de-DE, fr-FR), includes the primary language
+      plus 'en-US' as a secondary language to preserve English loanwords and code-switching without word drops.
+    - Otherwise, returns [lang].
+    """
+    if not lang or lang.lower() == "auto":
+        return None
+
+    lang_clean = lang.strip()
+    prefix = lang_clean.lower().split("-")[0].split("_")[0]
+    if prefix in EUROPEAN_LANGUAGE_PREFIXES:
+        codes = [lang_clean]
+        if "en-us" not in [c.lower() for c in codes]:
+            codes.append("en-US")
+        return codes
+
+    return [lang_clean]
+
 # Directory Configuration
 OUTPUT_DIR: str = _get_str("OUTPUT_DIR", "output")
 TRANSCRIPT_OUTPUT_DIR: str = _get_str("TRANSCRIPT_OUTPUT_DIR", "transcripts")
@@ -99,17 +130,21 @@ TRANSCRIPTION_MAX_CHARS_PER_LINE: int = _get_int("TRANSCRIPTION_MAX_CHARS_PER_LI
 TRANSCRIPTION_MAX_SENTENCES_PER_LINE: int = _get_int("TRANSCRIPTION_MAX_SENTENCES_PER_LINE", 3)
 
 # ---------------------------------------------------------------------------
-# GCP Configuration (required for transcription, optional for --prepare-only)
+# GCP & Gemini Model Configuration
 # ---------------------------------------------------------------------------
 
 GCP_PROJECT_ID: str | None = _get_optional_str("GCP_PROJECT_ID")
 GCS_BUCKET_NAME: str | None = _get_optional_str("GCS_BUCKET_NAME")
 GCP_REGION: str = _get_str("GCP_REGION", "eu")
-TRANSCRIPTION_MODEL: str = _get_str("TRANSCRIPTION_MODEL", "chirp_3")
+TRANSCRIPTION_MODEL: str = _get_str("TRANSCRIPTION_MODEL", "auto").lower()
 TRANSCRIPTION_CONCURRENCY: int = _get_int("TRANSCRIPTION_CONCURRENCY", 5)
 TRANSCRIPTION_MAX_TIMEOUT_SECONDS: int = _get_int("TRANSCRIPTION_MAX_TIMEOUT_SECONDS", 1800)
 GCS_UPLOAD_TIMEOUT_SECONDS: int = _get_int("GCS_UPLOAD_TIMEOUT_SECONDS", 600)
 TRANSCRIPTION_CUSTOM_PROMPT: str | None = _get_optional_str("TRANSCRIPTION_CUSTOM_PROMPT")
+
+# Gemini Configuration
+GEMINI_API_KEY: str | None = _get_optional_str("GEMINI_API_KEY")
+GEMINI_BACKEND: str = _get_str("GEMINI_BACKEND", "auto").lower()
 
 # GCP Authentication Configuration
 GCP_AUTH_MODE: str = _get_str("GCP_AUTH_MODE", "adc").lower()
@@ -151,4 +186,55 @@ def validate_gcp_config() -> None:
         raise ValueError(
             f"Missing required GCP configuration: {', '.join(missing)}. "
             f"Set these in your .env file. See .env.example for reference."
+        )
+
+
+def validate_backend_config(model: str = "auto", backend: str | None = None) -> None:
+    """
+    Validates configuration based on the target transcription model and backend.
+    - If model is 'gemini-3.5-transcribe' with API key, only GEMINI_API_KEY is required.
+    - If model is 'chirp_3' or Vertex AI backend, full GCP configuration is required.
+    - If model is 'auto', requires at least GEMINI_API_KEY or valid GCP configuration.
+    """
+    effective_backend = backend or GEMINI_BACKEND
+
+    if model == "chirp_3":
+        validate_gcp_config()
+        return
+
+    if model == "gemini-3.5-transcribe":
+        if effective_backend == "api_key":
+            if not GEMINI_API_KEY:
+                raise ValueError(
+                    "Missing required GEMINI_API_KEY for gemini-3.5-transcribe in api_key mode. "
+                    "Set GEMINI_API_KEY in your .env file."
+                )
+            return
+        if effective_backend == "vertex":
+            validate_gcp_config()
+            return
+        # auto backend: prefers unified GCP (Vertex AI) if configured, falls back to API key
+        if GCP_PROJECT_ID:
+            validate_gcp_config()
+            return
+        if GEMINI_API_KEY:
+            return
+        raise ValueError(
+            "Missing configuration for gemini-3.5-transcribe. "
+            "Please provide GEMINI_API_KEY (for AI Studio) or configure GCP credentials (for Vertex AI)."
+        )
+
+    # model == "auto"
+    has_api_key = bool(GEMINI_API_KEY)
+    has_gcp = False
+    try:
+        validate_gcp_config()
+        has_gcp = True
+    except ValueError:
+        has_gcp = False
+
+    if not has_api_key and not has_gcp:
+        raise ValueError(
+            "No transcription credentials configured. "
+            "Please set GEMINI_API_KEY or configure GCP_PROJECT_ID and GCS_BUCKET_NAME in your .env file."
         )

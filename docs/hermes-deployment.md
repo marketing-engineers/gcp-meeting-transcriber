@@ -42,20 +42,44 @@ gcloud iam service-accounts create hermes-transcriber \
 ```
 Note the resulting service account email (e.g., `hermes-transcriber@${PROJECT_ID}.iam.gserviceaccount.com`).
 
-### Step 3: Create and Bind Speech Project Role
-Create a custom role containing only the three permissions needed for batch transcription and quota attribution:
-```bash
-gcloud iam roles create hermesTranscriberSpeech \
-    --project=$PROJECT_ID \
-    --title="Hermes Transcriber Speech" \
-    --description="Minimal permissions for Speech-to-Text V2 BatchRecognize" \
-    --permissions="speech.recognizers.recognize,speech.operations.get,serviceusage.services.use" \
-    --stage="GA"
+### Step 3: Enable Required APIs and Create Project Role
 
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:hermes-transcriber@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="projects/${PROJECT_ID}/roles/hermesTranscriberSpeech"
-```
+1. **Enable required Google Cloud APIs:**
+   ```bash
+   gcloud services enable speech.googleapis.com aiplatform.googleapis.com --project=$PROJECT_ID
+   ```
+   *Note:* 
+   - `speech.googleapis.com` is required for Speech-to-Text V2 (Chirp 3).
+   - `aiplatform.googleapis.com` is required if using Gemini 3.5 Transcribe via Vertex AI (`GEMINI_BACKEND=vertex` or `auto`).
+
+2. **Create custom project role with minimal permissions:**
+   ```bash
+   gcloud iam roles create hermesTranscriberSpeech \
+       --project=$PROJECT_ID \
+       --title="Hermes Transcriber Speech & Vertex" \
+       --description="Minimal permissions for Speech-to-Text V2 and Vertex AI Gemini Transcribe" \
+       --permissions="speech.recognizers.recognize,speech.operations.get,serviceusage.services.use,aiplatform.endpoints.predict,aiplatform.models.list" \
+       --stage="GA"
+
+   gcloud projects add-iam-policy-binding $PROJECT_ID \
+       --member="serviceAccount:hermes-transcriber@${PROJECT_ID}.iam.gserviceaccount.com" \
+       --role="projects/${PROJECT_ID}/roles/hermesTranscriberSpeech"
+   ```
+   *If you already created `hermesTranscriberSpeech` previously without Vertex AI:*
+   ```bash
+   gcloud iam roles update hermesTranscriberSpeech \
+       --project=$PROJECT_ID \
+       --add-permissions="aiplatform.endpoints.predict"
+   ```
+   *(Alternatively, you can bind the standard `roles/aiplatform.user` role to the service account).*
+
+3. **Zero-IAM Alternative (Google AI Studio Key):**
+   If you do not want to enable Vertex AI or grant `aiplatform.endpoints.predict`, set a Gemini API key in `.env`:
+   ```bash
+   GEMINI_API_KEY=your_key
+   GEMINI_BACKEND=api_key
+   ```
+   This routes Gemini calls via the Google AI Studio Files API, bypassing Vertex AI IAM entirely.
 
 ### Step 4: Create Dedicated Hermes Bucket
 Create a dedicated bucket for Hermes transcription. Do **not** reuse a bucket containing other data.
@@ -152,7 +176,14 @@ On the Hermes VPS, run under the unprivileged `hermes` OS user:
 3. **Configure `.env` for Hermes:**
    ```bash
    cat <<EOF > .env
-   # GCP Authentication Mode
+   # Model Selection ('auto', 'gemini-3.5-transcribe', or 'chirp_3')
+   TRANSCRIPTION_MODEL=auto
+
+   # Option A: Gemini AI Studio Key (Zero-GCP setup, minimal IAM)
+   # GEMINI_API_KEY=your-gemini-api-key
+   GEMINI_BACKEND=auto
+
+   # Option B: GCP Service Account Mode (Chirp 3 and Vertex AI)
    GCP_AUTH_MODE=service_account_key
    GCP_SERVICE_ACCOUNT_KEY_FILE=/home/hermes/.config/gcp-audio-transcribe/hermes-sa.json
    GCP_EXPECTED_SERVICE_ACCOUNT=hermes-transcriber@${PROJECT_ID}.iam.gserviceaccount.com
@@ -161,7 +192,6 @@ On the Hermes VPS, run under the unprivileged `hermes` OS user:
    GCP_PROJECT_ID=${PROJECT_ID}
    GCS_BUCKET_NAME=${PROJECT_ID}-hermes-transcribe
    GCP_REGION=eu
-   TRANSCRIPTION_MODEL=chirp_3
    TRANSCRIPTION_CONCURRENCY=5
    TRANSCRIPTION_MAX_TIMEOUT_SECONDS=1800
    GCS_UPLOAD_TIMEOUT_SECONDS=600
@@ -238,3 +268,43 @@ gcloud iam service-accounts keys list --iam-account="hermes-transcriber@${PROJEC
 # Delete keys
 gcloud iam service-accounts keys delete <KEY_ID> --iam-account="hermes-transcriber@${PROJECT_ID}.iam.gserviceaccount.com"
 ```
+
+---
+
+## 6. Troubleshooting Common Deployment Errors
+
+### Error: `403 PERMISSION_DENIED (SERVICE_DISABLED): Agent Platform API (aiplatform.googleapis.com) has not been used...`
+
+**Symptom:**
+```text
+403 PERMISSION_DENIED: Agent Platform API (aiplatform.googleapis.com) has not been used in project ... before or it is disabled.
+```
+
+**Cause:**
+Gemini 3.5 Transcribe was invoked with `GEMINI_BACKEND=vertex` (or `auto` with GCP credentials configured), but the Vertex AI API has not been enabled in the GCP project.
+
+**Resolution:**
+Choose one of the following two paths:
+
+- **Route A: Enable Vertex AI on GCP (Enterprise Cloud Path)**
+  1. Enable the API:
+     ```bash
+     gcloud services enable aiplatform.googleapis.com --project=$PROJECT_ID
+     ```
+  2. Verify the service account has `aiplatform.endpoints.predict` permission:
+     ```bash
+     gcloud iam roles update hermesTranscriberSpeech \
+         --project=$PROJECT_ID \
+         --add-permissions="aiplatform.endpoints.predict"
+     ```
+     *(Or assign `roles/aiplatform.user`)*.
+
+- **Route B: Switch to Google AI Studio Key (Zero-GCP IAM Path)**
+  If you do not wish to enable Vertex AI or modify service account IAM:
+  1. Generate an API key in [Google AI Studio](https://aistudio.google.com/).
+  2. In your `.env` file, set:
+     ```bash
+     GEMINI_API_KEY=your_gemini_api_key
+     GEMINI_BACKEND=api_key
+     ```
+  This routes Gemini calls via the Google AI Studio Files API without touching Vertex AI.

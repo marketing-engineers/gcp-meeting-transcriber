@@ -145,9 +145,68 @@ def test_gcs_upload_timeout_default():
 
 def test_chunk_max_length_config_loaded():
     """Verify CHUNK_MAX_LENGTH_SECONDS_DUTCH and CHUNK_MAX_LENGTH_SECONDS_ENGLISH are loaded."""
-    from src.config import CHUNK_MAX_LENGTH_SECONDS_DUTCH, CHUNK_MAX_LENGTH_SECONDS_ENGLISH
+    from src.config import (
+        CHUNK_MAX_LENGTH_SECONDS_DUTCH,
+        CHUNK_MAX_LENGTH_SECONDS_ENGLISH,
+        CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED,
+        CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN,
+        CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART,
+        resolve_gemini_language_codes,
+    )
     assert CHUNK_MAX_LENGTH_SECONDS_DUTCH == 2700
     assert CHUNK_MAX_LENGTH_SECONDS_ENGLISH == 2700
+    assert CHUNK_MAX_LENGTH_SECONDS_GEMINI_DIARIZED == 1680
+    assert CHUNK_MAX_LENGTH_SECONDS_GEMINI_PLAIN == 3480
+    assert CHUNK_MAX_LENGTH_SECONDS_GEMINI_SMART == 1200
+
+    # Test resolve_gemini_language_codes
+    assert resolve_gemini_language_codes(None) is None
+    assert resolve_gemini_language_codes("auto") is None
+    assert resolve_gemini_language_codes("nl-NL") == ["nl-NL", "en-US"]
+    assert resolve_gemini_language_codes("de-DE") == ["de-DE", "en-US"]
+    assert resolve_gemini_language_codes("fr-FR") == ["fr-FR", "en-US"]
+    assert resolve_gemini_language_codes("en-US") == ["en-US"]
+    assert resolve_gemini_language_codes("ja-JP") == ["ja-JP"]
+
+
+def test_validate_backend_config_gemini_api_key():
+    """validate_backend_config passes for gemini with API key without GCS config."""
+    from src.config import validate_backend_config
+
+    with patch("src.config.GEMINI_API_KEY", "test-key"), \
+         patch("src.config.GCP_PROJECT_ID", None), \
+         patch("src.config.GCS_BUCKET_NAME", None):
+        validate_backend_config("gemini-3.5-transcribe", backend="api_key")  # Should not raise
+
+
+def test_validate_backend_config_gemini_api_key_missing():
+    """validate_backend_config raises ValueError if GEMINI_API_KEY is missing in api_key mode."""
+    from src.config import validate_backend_config
+
+    with patch("src.config.GEMINI_API_KEY", None):
+        with pytest.raises(ValueError, match="Missing required GEMINI_API_KEY"):
+            validate_backend_config("gemini-3.5-transcribe", backend="api_key")
+
+
+def test_validate_backend_config_chirp_requires_gcp():
+    """validate_backend_config raises ValueError for chirp_3 when GCP config is missing."""
+    from src.config import validate_backend_config
+
+    with patch("src.config.GCP_PROJECT_ID", None), \
+         patch("src.config.GCS_BUCKET_NAME", None):
+        with pytest.raises(ValueError, match="Missing required GCP configuration"):
+            validate_backend_config("chirp_3")
+
+
+def test_validate_backend_config_auto_no_credentials():
+    """validate_backend_config raises ValueError for auto model when neither API key nor GCP is set."""
+    from src.config import validate_backend_config
+
+    with patch("src.config.GEMINI_API_KEY", None), \
+         patch("src.config.GCP_PROJECT_ID", None), \
+         patch("src.config.GCS_BUCKET_NAME", None):
+        with pytest.raises(ValueError, match="No transcription credentials configured"):
+            validate_backend_config("auto")
 
 
 def test_line_formatting_config_defaults():
