@@ -128,6 +128,8 @@ TRANSCRIPT_OUTPUT_DIR: str = _get_str("TRANSCRIPT_OUTPUT_DIR", "transcripts")
 # Transcript Formatting Configuration
 TRANSCRIPTION_MAX_CHARS_PER_LINE: int = _get_int("TRANSCRIPTION_MAX_CHARS_PER_LINE", 120)
 TRANSCRIPTION_MAX_SENTENCES_PER_LINE: int = _get_int("TRANSCRIPTION_MAX_SENTENCES_PER_LINE", 3)
+TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS: int = _get_int("TRANSCRIPTION_MILESTONE_INTERVAL_SECONDS", 300)
+REPOSITORY_NAME: str = _get_str("REPOSITORY_NAME", "marketing-engineers-gcp-audio-transcribe")
 
 # ---------------------------------------------------------------------------
 # GCP & Gemini Model Configuration
